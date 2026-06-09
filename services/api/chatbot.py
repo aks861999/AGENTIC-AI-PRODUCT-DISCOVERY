@@ -1,0 +1,293 @@
+from __future__ import annotations
+import asyncio, logging
+from typing import Annotated, Literal, Optional
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from typing_extensions import TypedDict
+from opensearchpy import OpenSearch
+from sentence_transformers import SentenceTransformer
+from api.search import hybrid_search
+from api.cart import create_checkout_session, complete_checkout
+from shared.config.settings import get_settings
+import api.dependencies as deps
+
+import json
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+# ── State ──────────────────────────────────────────────────────────────────────
+class ChatState(TypedDict):
+    messages: Annotated[list, add_messages]
+    session_id: str
+    last_results: list[dict]   # products from last search, kept for follow-ups
+    last_query: Optional[str]
+
+
+# ── In-memory session store (replace with Redis for production) ────────────────
+_sessions: dict[str, ChatState] = {}
+
+
+# ── LLM factory ───────────────────────────────────────────────────────────────
+def _get_llm() -> ChatGoogleGenerativeAI:
+    return ChatGoogleGenerativeAI(
+        model=settings.llm_model,
+        temperature=0.3,
+        google_api_key=settings.google_api_key,
+    )
+
+
+
+
+SEARCH_ONLY_PROMPT = """You are a helpful product search assistant.
+You have access to one tool:
+- **search_products**: call this for ANY request to find, get, show, recommend,
+  or browse products — including phrases like "get me X", "any good Y", "I need Z",
+  "something for winter", "show me cream", etc.
+
+Always call search_products whenever the user expresses any product need.
+When search_products returns a JSON object, present the products to the user using
+the "text" field only. Do not output raw JSON. The "products" array is internal
+UI data and should not be mentioned.
+
+Keep responses concise and product-focused.
+
+If the price shows as N/A or is unknown, pass price_cents=0.
+
+When presenting results, list them clearly and ask if the user wants to search further.
+"""
+
+# rename existing SYSTEM_PROMPT to FULL_COMMERCE_PROMPT
+FULL_COMMERCE_PROMPT = """You are a helpful product search assistant.
+You have access to three tools:
+- **search_products**: call this for ANY request to find, get, show, recommend,
+  or browse products — including phrases like "get me X", "any good Y", "I need Z",
+  "something for winter", "show me cream", etc.
+- **ucp_add_to_cart**: call this when a user wants to add a specific product to their cart.
+- **ucp_checkout**: call this when the user wants to pay or complete their order.
+
+Always call search_products first whenever the user expresses any product need.
+When search_products returns a JSON object, present the products to the user using
+the "text" field only. Do not output raw JSON. The "products" array is internal
+UI data and should not be mentioned.
+
+When presenting results, list them clearly and ask if the user wants to add any to their cart.
+When a user says "add the first one" or "buy it", call ucp_add_to_cart with the correct details.
+Keep responses concise and product-focused.
+
+If the price shows as N/A or is unknown, pass price_cents=0.
+Never refuse to add due to a missing price; use price_cents=0 as a placeholder.
+"""
+
+def _active_system_prompt() -> str:
+    return FULL_COMMERCE_PROMPT if settings.agent_mode == "full_commerce" else SEARCH_ONLY_PROMPT
+
+
+
+# ── Tools — ALL defined at module level, NEVER redefined inside a function ─────
+
+@tool
+async def search_products(query: str) -> str:
+    """Search the product catalogue using natural language. Call this whenever the
+    user wants to find, get, show, browse, discover, or get recommendations for
+    any product — including casual phrases like 'get me X' or 'something for Y'."""
+
+    client = deps.get_os_client()
+    model  = deps.get_model()
+    if client is None or model is None:
+        return json.dumps({"text": "Search is temporarily unavailable.", "products": []})
+
+    try:
+        vector = await asyncio.to_thread(
+            lambda: model.encode(query, normalize_embeddings=True).tolist()
+        )
+        result = await hybrid_search(
+            client=client,
+            query=query,
+            query_vector=vector,
+            index_name=settings.index_name,
+            size=5,
+        )
+        if not result.hits:
+            return json.dumps({"text": "No products found for that query.", "products": []})
+
+        products = []
+        text_rows = []
+        for i, h in enumerate(result.hits):
+            products.append({
+                "id": h.id,
+                "title": h.title,
+                "price": h.price,
+                "average_rating": h.average_rating,
+                "primary_image_url": h.primary_image_url,
+            })
+            text_rows.append(
+                f"{i+1}. [{h.id}] {h.title} — €{h.price or 'N/A'} ★{h.average_rating or 'N/A'}"
+            )
+
+        return json.dumps({
+            "text": "\n".join(text_rows),
+            "products": products
+        }, ensure_ascii=False)
+
+    except Exception as exc:
+        logger.warning("search_products tool error: %s", exc)
+        return json.dumps({"text": "Search failed, please try again.", "products": []})
+
+
+@tool
+def ucp_add_to_cart(product_id: str, title: str, price_cents: int = 0) -> str:
+    """Add a product to a UCP checkout session.
+    price_cents is the price in cents (e.g. 1999 = €19.99).
+    """
+    session = create_checkout_session(product_id, title, price_cents)
+    total = sum(li.item.price * li.quantity for li in session.line_items) / 100
+    return (
+        f"✅ Added '{title}' to cart.\n"
+        f"UCP Session ID: {session.id}\n"
+        f"Cart total: €{total:.2f}"
+    )
+
+
+@tool
+def ucp_checkout(session_id: str) -> str:
+    """Complete a UCP checkout session and place the order."""
+    order = complete_checkout(session_id)
+    return (
+        f"🎉 Order confirmed!\n"
+        f"Order ID : {order.id}\n"
+        f"Status   : {order.status}\n"
+        f"Total    : €{order.total:.2f}"
+    )
+
+
+# Single module-level registry — never reassigned inside any function
+# NEW — tool definitions stay module-level, selection is runtime
+_SEARCH_ONLY_TOOLS = [search_products]
+_FULL_COMMERCE_TOOLS = [search_products, ucp_add_to_cart, ucp_checkout]
+
+def _active_tools() -> list:
+    return _FULL_COMMERCE_TOOLS if settings.agent_mode == "full_commerce" else _SEARCH_ONLY_TOOLS
+
+
+# ── Chat node ─────────────────────────────────────────────────────────────────
+async def chat_node(
+    state: ChatState,
+    client: OpenSearch,
+    model: SentenceTransformer,
+) -> ChatState:
+    
+    tools = _active_tools()                      
+    llm = _get_llm().bind_tools(tools)
+
+
+    full_messages = (
+        [SystemMessage(content=_active_system_prompt())]  # ← was SYSTEM_PROMPT
+        + list(state["messages"])
+    )
+
+    response = await asyncio.to_thread(llm.invoke, full_messages)
+
+    return {
+        **state,
+        "messages": [response],          # add_messages appends automatically
+        "last_results": list(state.get("last_results", [])),
+        "last_query": state.get("last_query"),
+    }
+
+
+# ── Routing: go to tools if LLM made a tool call, otherwise end ───────────────
+def _route(state: ChatState) -> Literal["tools", "end"]:
+    last = state["messages"][-1] if state["messages"] else None
+    if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
+        return "tools"
+    return "end"
+
+
+# ── Graph factory (rebuilt per request — cheap, stateless compile) ─────────────
+def _build_graph(client: OpenSearch, model: SentenceTransformer):
+    async def _chat(state): return await chat_node(state, client, model)
+
+    tool_node = ToolNode(_active_tools())         
+
+    g = StateGraph(ChatState)
+    g.add_node("chat", _chat)
+    g.add_node("tools", tool_node)
+
+
+    g.set_entry_point("chat")
+    g.add_conditional_edges("chat", _route, {"tools": "tools", "end": END})
+    g.add_edge("tools", "chat")   # after tool execution → back to chat
+
+    return g.compile()
+
+
+def _extract_text(content) -> str:
+    """Normalize AIMessage content — handles both str and list-of-parts (Gemini 2.5)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+            if not (isinstance(part, dict) and part.get("type") == "tool_use")
+        )
+    return str(content)
+
+
+#
+async def chat_turn(
+    session_id: str,
+    user_message: str,
+    client: OpenSearch,
+    model: SentenceTransformer,
+) -> dict:
+    if session_id not in _sessions:
+        _sessions[session_id] = {
+            "messages": [],
+            "session_id": session_id,
+            "last_results": [],
+            "last_query": None,
+        }
+
+    state = _sessions[session_id]
+    state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
+
+    graph = _build_graph(client, model)
+    new_state = await graph.ainvoke(state)
+
+    # ── NEW: extract product cards from the last search tool call ──
+    last_results: list[dict] = []
+    for msg in reversed(new_state["messages"]):
+        if isinstance(msg, ToolMessage) and getattr(msg, "name", None) == "search_products":
+            try:
+                payload = json.loads(msg.content)
+                if isinstance(payload, dict):
+                    last_results = payload.get("products", [])
+            except Exception:
+                pass
+            break
+
+    new_state["last_results"] = last_results
+    _sessions[session_id] = new_state
+
+    last_ai_text = next(
+        (
+            _extract_text(m.content)
+            for m in reversed(new_state["messages"])
+            if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)
+        ),
+        "",
+    )
+
+    return {
+        "session_id": session_id,
+        "reply": last_ai_text,
+        "results": last_results,
+    }

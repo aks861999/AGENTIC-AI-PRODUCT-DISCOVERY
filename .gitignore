@@ -1,0 +1,50 @@
+# Environment
+.env
+*.env
+.env.docker
+
+demo/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.coveragerc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# HuggingFace cache (can be large)
+~/.cache/huggingface/
+
+# Docker volumes
+opensearch-data/
+redis-data/
+
+# Model cache
+models/
+
+experiment/*.npy
+experiment/*.parquet
+experiment/*.jsonl
+
+search_shopify/

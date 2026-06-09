@@ -1,0 +1,22 @@
+# Ingestion service dependencies
+
+# HuggingFace dataset loading
+datasets==3.4.1
+huggingface-hub==0.29.3
+
+# OpenSearch
+opensearch-py==2.8.0
+
+
+# Embedding model
+sentence-transformers==3.4.1
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu
+transformers==4.50.0
+
+# Settings
+pydantic==2.11.1
+pydantic-settings==2.8.1
+
+# Utilities
+tqdm==4.67.1
