@@ -326,9 +326,6 @@ async def chat(
 
 # ── UCP Cart / Checkout ───────────────────────────────────────────────────────
 
-class _CreateSessionBody(dict):
-    """Inline body model for POST /cart/session."""
-
 
 class CreateSessionRequest(_BM):
     product_id:  str

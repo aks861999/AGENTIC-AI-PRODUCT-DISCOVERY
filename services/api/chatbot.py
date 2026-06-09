@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio, logging
 from typing import Annotated, Literal, Optional
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
@@ -63,7 +62,6 @@ If the price shows as N/A or is unknown, pass price_cents=0.
 When presenting results, list them clearly and ask if the user wants to search further.
 """
 
-# rename existing SYSTEM_PROMPT to FULL_COMMERCE_PROMPT
 FULL_COMMERCE_PROMPT = """You are a helpful product search assistant.
 You have access to three tools:
 - **search_products**: call this for ANY request to find, get, show, recommend,
@@ -167,8 +165,7 @@ def ucp_checkout(session_id: str) -> str:
     )
 
 
-# Single module-level registry — never reassigned inside any function
-# NEW — tool definitions stay module-level, selection is runtime
+
 _SEARCH_ONLY_TOOLS = [search_products]
 _FULL_COMMERCE_TOOLS = [search_products, ucp_add_to_cart, ucp_checkout]
 
@@ -241,7 +238,7 @@ def _extract_text(content) -> str:
     return str(content)
 
 
-#
+
 async def chat_turn(
     session_id: str,
     user_message: str,

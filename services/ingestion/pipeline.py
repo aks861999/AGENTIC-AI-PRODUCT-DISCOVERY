@@ -352,7 +352,7 @@ def run_pipeline() -> None:
     # Flush remaining
     if accumulated_docs:
         actions = list(
-            build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name)
+            build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name, client)
         )
         success, errors = helpers.bulk(
             client,

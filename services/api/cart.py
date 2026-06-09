@@ -8,11 +8,6 @@ Universal Commerce Protocol schema (https://ucp.dev/latest/).
 Schema source: Google/Shopify UCP spec 2026-01-11
   - dev.ucp.shopping.checkout
   - dev.ucp.mock_payment  (test payment handler — no real charges)
-
-To swap in the official SDK later:
-    pip install ucp-python-sdk          (once published to PyPI)
-    from ucp import CheckoutSession, LineItem, Order
-    and delete the Pydantic model block below.
 """
 import uuid, logging
 from typing import Any, Literal, Optional

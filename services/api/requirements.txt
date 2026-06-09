@@ -5,13 +5,13 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 
 # OpenSearch
-opensearch-py==3.2.0
+opensearch-py==2.8.0
 
-# Embedding — CPU-only torch saves ~6GB vs full CUDA torch
-sentence-transformers==5.4.1
+# Embedding
+sentence-transformers==3.4.1
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.10.0+cpu
-transformers==5.7.0
+torch==2.6.0+cpu
+transformers==4.50.0
 
 # LangChain NL query
 langgraph==1.1.10
@@ -24,8 +24,8 @@ langchain-google-genai==4.2.2
 langsmith==0.7.38
 
 # Settings / validation
-pydantic==2.13.3
+pydantic==2.11.1
 
-pydantic-settings==2.14.0
+pydantic-settings==2.8.1
 
 httpx==0.28.1
