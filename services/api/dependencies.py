@@ -20,7 +20,7 @@ from fastapi import Depends, HTTPException, status
 from opensearchpy import OpenSearch
 from sentence_transformers import SentenceTransformer
 
-# Module-level singletons — set during application lifespan by api/main.py
+# Module-level singletons , set during application lifespan by api/main.py
 _os_client: OpenSearch | None = None
 _embedding_model: SentenceTransformer | None = None
 

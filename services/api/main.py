@@ -2,16 +2,16 @@
 FastAPI application entry point.
 
 Endpoints:
-  GET  /health          — liveness / dependency health check
-  GET  /search          — structured keyword + filter search
-  POST /nl-search       — natural language search (LLM-powered)
-  GET  /suggest         — autocomplete prefix suggestions
-  POST /index/product   — (admin) index a single product
-  POST /chat            — LangGraph multi-turn chatbot
-  POST /cart/session    — create a new UCP checkout session
-  POST /cart/{id}/add   — add a line item to an existing session
-  GET  /cart/{id}       — view a checkout session
-  POST /cart/checkout   — complete checkout and place order
+  GET  /health          , liveness / dependency health check
+  GET  /search          , structured keyword + filter search
+  POST /nl-search       , natural language search (LLM-powered)
+  GET  /suggest         , autocomplete prefix suggestions
+  POST /index/product   , (admin) index a single product
+  POST /chat            , LangGraph multi-turn chatbot
+  POST /cart/session    , create a new UCP checkout session
+  POST /cart/{id}/add   , add a line item to an existing session
+  GET  /cart/{id}       , view a checkout session
+  POST /cart/checkout   , complete checkout and place order
 """
 
 from __future__ import annotations

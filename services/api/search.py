@@ -5,9 +5,9 @@ All OpenSearch calls are executed in a thread pool via asyncio.to_thread()
 so that the async FastAPI event loop is never blocked.
 
 Functions:
-    lexical_search()  — BM25 multi_match + function_score rating boost
-    semantic_search() — kNN approximate nearest-neighbour query
-    hybrid_search()   — Combined BM25 + kNN with normalization pipeline
+    lexical_search()  , BM25 multi_match + function_score rating boost
+    semantic_search() , kNN approximate nearest-neighbour query
+    hybrid_search()   , Combined BM25 + kNN with normalization pipeline
 """
 
 from __future__ import annotations

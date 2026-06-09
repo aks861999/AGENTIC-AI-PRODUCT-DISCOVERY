@@ -1,10 +1,10 @@
 """
-api/middleware.py — ASGI middleware for the Search API.
+api/middleware.py , ASGI middleware for the Search API.
 
 Middleware applied (in order, outermost first):
-    1. RequestTimingMiddleware  — adds X-Process-Time-Ms response header
+    1. RequestTimingMiddleware  , adds X-Process-Time-Ms response header
                                    and logs method + path + status + latency
-    2. CorrelationIdMiddleware  — generates/forwards X-Correlation-ID
+    2. CorrelationIdMiddleware  , generates/forwards X-Correlation-ID
                                    so distributed traces can be joined
 
 Usage in api/main.py:

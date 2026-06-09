@@ -65,7 +65,7 @@ class ChatRequest(BaseModel):
     message:    str            = Field(..., min_length=1, max_length=2000, description="User message")
     session_id: Optional[str]  = Field(
         default_factory=lambda: str(_uuid.uuid4()),
-        description="Chat session ID — generate once, reuse across turns",
+        description="Chat session ID , generate once, reuse across turns",
     )
 
 

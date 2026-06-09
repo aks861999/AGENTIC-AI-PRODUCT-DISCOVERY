@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are a product search query parser for an e-commerce platform.
 Your task is to extract structured search parameters from the user's natural language query.
 
-Output ONLY valid JSON matching this exact schema — no markdown, no explanation:
+Output ONLY valid JSON matching this exact schema , no markdown, no explanation:
 {{
   "semantic_query": "<string: the core product description to search for>",
   "filters": {{
@@ -139,7 +139,7 @@ def _build_llm_chain():
             logger.info("NL chain: using Google Gemini (%s)", settings.llm_model)
             return prompt | llm | StrOutputParser()
         except Exception as exc:
-            logger.warning("Failed to init Gemini LLM: %s — using stub.", exc)
+            logger.warning("Failed to init Gemini LLM: %s , using stub.", exc)
 
     # Stub chain: echo-based minimal parser for offline testing
     logger.info("NL chain: using stub parser (no GOOGLE_API_KEY set).")
@@ -219,7 +219,7 @@ async def parse_nl_query(query: str) -> ParsedNLQuery:
         parsed_dict = _extract_json(raw_output)
         return _dict_to_parsed_query(parsed_dict)
     except Exception as exc:
-        logger.error("LLM chain failed: %s — falling back to stub parser.", exc)
+        logger.error("LLM chain failed: %s , falling back to stub parser.", exc)
         return _stub_parse(query)
 
 

@@ -47,7 +47,7 @@ def _get_llm() -> ChatGoogleGenerativeAI:
 SEARCH_ONLY_PROMPT = """You are a helpful product search assistant.
 You have access to one tool:
 - **search_products**: call this for ANY request to find, get, show, recommend,
-  or browse products — including phrases like "get me X", "any good Y", "I need Z",
+  or browse products , including phrases like "get me X", "any good Y", "I need Z",
   "something for winter", "show me cream", etc.
 
 Always call search_products whenever the user expresses any product need.
@@ -65,7 +65,7 @@ When presenting results, list them clearly and ask if the user wants to search f
 FULL_COMMERCE_PROMPT = """You are a helpful product search assistant.
 You have access to three tools:
 - **search_products**: call this for ANY request to find, get, show, recommend,
-  or browse products — including phrases like "get me X", "any good Y", "I need Z",
+  or browse products , including phrases like "get me X", "any good Y", "I need Z",
   "something for winter", "show me cream", etc.
 - **ucp_add_to_cart**: call this when a user wants to add a specific product to their cart.
 - **ucp_checkout**: call this when the user wants to pay or complete their order.
@@ -88,13 +88,13 @@ def _active_system_prompt() -> str:
 
 
 
-# ── Tools — ALL defined at module level, NEVER redefined inside a function ─────
+# ── Tools , ALL defined at module level, NEVER redefined inside a function ─────
 
 @tool
 async def search_products(query: str) -> str:
     """Search the product catalogue using natural language. Call this whenever the
     user wants to find, get, show, browse, discover, or get recommendations for
-    any product — including casual phrases like 'get me X' or 'something for Y'."""
+    any product , including casual phrases like 'get me X' or 'something for Y'."""
 
     client = deps.get_os_client()
     model  = deps.get_model()
@@ -126,7 +126,7 @@ async def search_products(query: str) -> str:
                 "primary_image_url": h.primary_image_url,
             })
             text_rows.append(
-                f"{i+1}. [{h.id}] {h.title} — €{h.price or 'N/A'} ★{h.average_rating or 'N/A'}"
+                f"{i+1}. [{h.id}] {h.title} , €{h.price or 'N/A'} ★{h.average_rating or 'N/A'}"
             )
 
         return json.dumps({
@@ -207,7 +207,7 @@ def _route(state: ChatState) -> Literal["tools", "end"]:
     return "end"
 
 
-# ── Graph factory (rebuilt per request — cheap, stateless compile) ─────────────
+# ── Graph factory (rebuilt per request , cheap, stateless compile) ─────────────
 def _build_graph(client: OpenSearch, model: SentenceTransformer):
     async def _chat(state): return await chat_node(state, client, model)
 
@@ -226,7 +226,7 @@ def _build_graph(client: OpenSearch, model: SentenceTransformer):
 
 
 def _extract_text(content) -> str:
-    """Normalize AIMessage content — handles both str and list-of-parts (Gemini 2.5)."""
+    """Normalize AIMessage content , handles both str and list-of-parts (Gemini 2.5)."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):

@@ -1,5 +1,5 @@
 """
-Ingestion pipeline — one-shot ETL that:
+Ingestion pipeline , one-shot ETL that:
   1. Loads the HuggingFace Amazon Reviews 2023 dataset
   2. Preprocesses each record (build embedding_text, normalise fields)
   3. Batch-encodes embedding_text with BAAI/bge-small-en-v1.5
@@ -213,7 +213,7 @@ def get_client(settings) -> OpenSearch:
 def ensure_index(client: OpenSearch, index_name: str) -> None:
     """Create the index if it does not already exist."""
     if client.indices.exists(index=index_name):
-        logger.info("Index '%s' already exists — skipping creation.", index_name)
+        logger.info("Index '%s' already exists , skipping creation.", index_name)
         return
     logger.info("Creating index '%s'...", index_name)
     client.indices.create(index=index_name, body=INDEX_SETTINGS)
@@ -222,7 +222,7 @@ def ensure_index(client: OpenSearch, index_name: str) -> None:
 
 def ensure_search_pipeline(client: OpenSearch) -> None:
     """Register the hybrid search pipeline if absent."""
-    # NEW — opensearch-py 3.x compatible
+    # NEW , opensearch-py 3.x compatible
     try:
         client.http.get(f"/_search/pipeline/{HYBRID_PIPELINE_ID}")
     except Exception:
@@ -278,7 +278,7 @@ def run_pipeline() -> None:
         split="full[:1000]",
         trust_remote_code=True,
     )
-    logger.info("Dataset loaded — %d records.", len(dataset))
+    logger.info("Dataset loaded , %d records.", len(dataset))
 
     # 4. Preprocess all records
     logger.info("Preprocessing records...")

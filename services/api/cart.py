@@ -7,7 +7,7 @@ Universal Commerce Protocol schema (https://ucp.dev/latest/).
 
 Schema source: Google/Shopify UCP spec 2026-01-11
   - dev.ucp.shopping.checkout
-  - dev.ucp.mock_payment  (test payment handler — no real charges)
+  - dev.ucp.mock_payment  (test payment handler , no real charges)
 """
 import uuid, logging
 from typing import Any, Literal, Optional
@@ -19,7 +19,7 @@ UCP_VERSION = "2026-01-11"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# UCP Schema — Pydantic models that mirror the real UCP JSON structure
+# UCP Schema , Pydantic models that mirror the real UCP JSON structure
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class UCPCapability(BaseModel):
@@ -36,7 +36,7 @@ class UCPItem(BaseModel):
     """Catalogue item reference inside a line item."""
     id:    str
     title: str
-    price: int   # in cents — e.g. 1999 = €19.99
+    price: int   # in cents , e.g. 1999 = €19.99
 
 
 class UCPTotal(BaseModel):
@@ -65,7 +65,7 @@ class UCPBuyer(BaseModel):
 
 
 class MockPaymentHandler(BaseModel):
-    """dev.ucp.mock_payment — test handler, no real charges."""
+    """dev.ucp.mock_payment , test handler, no real charges."""
     id:               str       = "mock_payment_handler"
     name:             str       = "dev.ucp.mock_payment"
     version:          str       = UCP_VERSION
@@ -105,7 +105,7 @@ class UCPPayment(BaseModel):
 
 
 class CheckoutSession(BaseModel):
-    """Full UCP CheckoutSession — spec: dev.ucp.shopping.checkout"""
+    """Full UCP CheckoutSession , spec: dev.ucp.shopping.checkout"""
     ucp:        UCPMeta          = Field(default_factory=UCPMeta)
     id:         str              = Field(default_factory=lambda: f"chk_{uuid.uuid4().hex[:9]}")
     status:     str              = "ready_for_complete"
@@ -128,7 +128,7 @@ class CheckoutSession(BaseModel):
 
 
 class Order(BaseModel):
-    """Completed UCP order — returned after checkout completion."""
+    """Completed UCP order , returned after checkout completion."""
     id:          str
     checkout_id: str
     line_items:  list[LineItem]
@@ -145,7 +145,7 @@ _sessions: dict[str, CheckoutSession] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Public API — used by chatbot.py (via @tool) and main.py (REST endpoints)
+# Public API , used by chatbot.py (via @tool) and main.py (REST endpoints)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def create_checkout_session(
