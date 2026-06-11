@@ -12,18 +12,11 @@ Users describe what they want in plain language. The agent searches a product ca
 
 ## Architecture
 
-```
-User ──► FastAPI  ──► LangGraph Agent (Gemini)
-                          │
-              ┌───────────┼────────────────┐
-              ▼           ▼                ▼
-        search_products  ucp_add_to_cart  ucp_checkout
-              │
-              ▼
-        OpenSearch (HNSW/FAISS)
-        BM25 + dense vector (0.4 / 0.6)
-        BAAI/bge-small-en-v1.5 embeddings
-```
+<p align="center">
+  <img src="images/architecture.png" alt="Architecture Diagram" width="900">
+</p>
+
+The system consists of a FastAPI application serving a LangGraph-based agent that performs hybrid retrieval over OpenSearch and executes commerce actions through tool calls.
 
 **Services**
 
