@@ -8,6 +8,7 @@ Index design decisions:
 - title is mapped as both text (BM25) and keyword (exact filter / sort)
 - Custom analysers: product_analyzer for full-text, autocomplete_analyzer for suggest
 """
+# created a new branch specific for wurth
 
 from __future__ import annotations
 
