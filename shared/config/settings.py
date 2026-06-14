@@ -42,12 +42,9 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=128, alias="BATCH_SIZE")
 
     # ── Ingestion ─────────────────────────────────────────────────
-    hf_dataset: str = Field(
-        default="McAuley-Lab/Amazon-Reviews-2023", alias="HF_DATASET"
-    )
-    hf_dataset_config: str = Field(
-        default="raw_meta_All_Beauty", alias="HF_DATASET_CONFIG"
-    )
+    home_depot_desc_path: str = Field(..., alias="HOME_DEPOT_DESC_PATH")
+    home_depot_attr_path: str = Field(..., alias="HOME_DEPOT_ATTR_PATH")
+    
     chunk_size: int = Field(default=500, alias="CHUNK_SIZE")
 
     # ── LLM / Google Generative AI ────────────────────────────────

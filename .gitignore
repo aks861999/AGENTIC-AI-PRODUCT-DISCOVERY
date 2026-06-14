@@ -3,6 +3,8 @@
 *.env
 .env.docker
 
+volumes/home_depot_data/*
+
 demo/
 # Python
 __pycache__/
