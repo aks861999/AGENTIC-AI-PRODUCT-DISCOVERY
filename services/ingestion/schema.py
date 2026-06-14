@@ -10,14 +10,17 @@ Index design decisions:
 """
 # created a new branch specific for wurth
 
+"""
+OpenSearch index mapping and settings for the Home Depot catalog index.
+"""
 from __future__ import annotations
 
 INDEX_SETTINGS: dict = {
     "settings": {
         "index": {
             "knn": True,
-            "number_of_shards": 3,
-            "number_of_replicas": 1,
+            "number_of_shards": 1,
+            "number_of_replicas": 0,
         },
         "analysis": {
             "tokenizer": {
@@ -48,8 +51,9 @@ INDEX_SETTINGS: dict = {
         },
     },
     "mappings": {
+        "dynamic": "strict",
         "properties": {
-            # ── Textual fields ──────────────────────────────────────
+            "product_uid": {"type": "keyword"},
             "title": {
                 "type": "text",
                 "analyzer": "product_analyzer",
@@ -62,15 +66,23 @@ INDEX_SETTINGS: dict = {
                     },
                 },
             },
-            "description": {
+            "product_description": {
                 "type": "text",
                 "analyzer": "product_analyzer",
             },
-            "features": {
-                "type": "text",
-                "analyzer": "product_analyzer",
+            "attributes": {
+                "type": "nested",
+                "properties": {
+                    "name": {"type": "keyword"},
+                    "value": {
+                        "type": "text",
+                        "analyzer": "product_analyzer",
+                        "fields": {
+                            "keyword": {"type": "keyword", "ignore_above": 256}
+                        }
+                    }
+                }
             },
-            # ── Vector field ────────────────────────────────────────
             "embedding_vector": {
                 "type": "knn_vector",
                 "dimension": 384,
@@ -84,30 +96,10 @@ INDEX_SETTINGS: dict = {
                     },
                 },
             },
-            # ── Categorical / filter fields ─────────────────────────
-            "main_category": {"type": "keyword"},
-            "sub_category": {"type": "keyword"},
-            "parent_asin": {"type": "keyword"},
-            "store": {"type": "keyword"},
-            # ── Numeric fields ──────────────────────────────────────
-            "price": {"type": "float"},
-            "average_rating": {"type": "float"},
-            "rating_number": {"type": "integer"},
-            # ── Display-only fields (not indexed) ────────────────────
-            "primary_image_url": {"type": "keyword", "index": False},
-            "thumbnail_url": {"type": "keyword", "index": False},
-            # ── Embedding source text (stored for debug) ─────────────
-            "embedding_text": {
-                "type": "text",
-                "index": False,
-                "store": True,
-            },
         }
     },
 }
 
-
-# Search pipeline for hybrid normalization (registered once at startup)
 HYBRID_PIPELINE_ID = "hybrid-search-pipeline"
 
 HYBRID_SEARCH_PIPELINE: dict = {
