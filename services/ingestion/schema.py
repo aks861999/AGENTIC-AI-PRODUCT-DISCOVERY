@@ -7,10 +7,6 @@ Index design decisions:
 - hnsw parameters: ef_construction=128, m=16 → good recall/size trade-off
 - title is mapped as both text (BM25) and keyword (exact filter / sort)
 - Custom analysers: product_analyzer for full-text, autocomplete_analyzer for suggest
-"""
-# created a new branch specific for wurth
-
-"""
 OpenSearch index mapping and settings for the Home Depot catalog index.
 """
 from __future__ import annotations

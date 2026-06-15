@@ -13,7 +13,7 @@ from typing import Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from opensearchpy import OpenSearch
+from opensearchpy import OpenSearch, RequestsHttpConnection 
 from sentence_transformers import SentenceTransformer
 
 from api.middleware import add_middleware
@@ -53,7 +53,7 @@ def _create_os_client() -> OpenSearch:
         timeout=30,
         retry_on_timeout=True,
         max_retries=3,
-        connection_class="requests",
+        connection_class=RequestsHttpConnection,
         pool_maxsize=10,
         pool_block=False,
     )

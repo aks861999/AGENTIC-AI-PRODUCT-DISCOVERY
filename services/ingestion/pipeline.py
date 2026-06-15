@@ -17,7 +17,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from opensearchpy import OpenSearch, helpers
+from opensearchpy import OpenSearch, helpers, RequestsHttpConnection 
+
 from sentence_transformers import SentenceTransformer
 
 from shared.config.settings import get_settings
@@ -141,7 +142,7 @@ def get_client(settings) -> OpenSearch:
         timeout=60,
         retry_on_timeout=True,
         max_retries=3,
-        connection_class="requests",
+        connection_class=RequestsHttpConnection,
         pool_maxsize=10,
         pool_block=False,
     )
