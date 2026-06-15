@@ -114,18 +114,28 @@ async def search_products(query: str) -> str:
         if not result.hits:
             return json.dumps({"text": "No products found for that query.", "products": []})
 
+        # ✅ FIXED — only fields that exist on ProductHit
         products = []
         text_rows = []
         for i, h in enumerate(result.hits):
+            # Top 3 attributes as a readable string
+            attrs = ", ".join(
+                f"{a.name}: {a.value}" for a in h.attributes[:3]
+            ) if h.attributes else "N/A"
+
             products.append({
                 "id": h.id,
+                "product_uid": h.product_uid,
                 "title": h.title,
-                "price": h.price,
-                "average_rating": h.average_rating,
-                "primary_image_url": h.primary_image_url,
+                "product_description": h.product_description[:150],
+                "bullet_points": h.bullet_points[:2],
+                "attributes": [{"name": a.name, "value": a.value} for a in h.attributes[:5]],
+                "primary_image_url": None,   # not in Home Depot dataset
             })
             text_rows.append(
-                f"{i+1}. [{h.id}] {h.title} , €{h.price or 'N/A'} ★{h.average_rating or 'N/A'}"
+                f"{i+1}. {h.title}\n"
+                f"   {h.product_description[:120]}...\n"
+                f"   Specs: {attrs}"
             )
 
         return json.dumps({

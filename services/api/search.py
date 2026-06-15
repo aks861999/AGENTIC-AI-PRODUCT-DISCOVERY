@@ -131,7 +131,7 @@ def _build_hybrid_query(query: str, query_vector: list[float], filters: list[dic
         }
     }
 
-    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 100}}}
+    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 20}}}
     if filters:
         knn_sub["knn"]["embedding_vector"]["filter"] = {"bool": {"filter": filters}}
 
@@ -151,13 +151,13 @@ def _parse_response(raw: dict, mode: SearchMode) -> SearchResponse:
 async def lexical_search(client: OpenSearch, query: str, index_name: str, required_attributes: Optional[dict[str, str]] = None, boost_terms: Optional[list[str]] = None, size: int = 10, from_: int = 0) -> SearchResponse:
     filters = _build_filter_clauses(required_attributes)
     body = _build_lexical_query(query, filters, boost_terms, size, from_)
-    raw = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=15)
+    raw = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=30)
     return _parse_response(raw, SearchMode.lexical)
 
 async def semantic_search(client: OpenSearch, query_vector: list[float], index_name: str, required_attributes: Optional[dict[str, str]] = None, size: int = 10, from_: int = 0, k: int = 50) -> SearchResponse:
     filters = _build_filter_clauses(required_attributes)
     body = _build_semantic_query(query_vector, filters, k=k, size=size, from_=from_)
-    raw = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=15)
+    raw = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=25)
     return _parse_response(raw, SearchMode.semantic)
 
 async def hybrid_search(client: OpenSearch, query: str, query_vector: list[float], index_name: str, required_attributes: Optional[dict[str, str]] = None, boost_terms: Optional[list[str]] = None, size: int = 10, from_: int = 0) -> SearchResponse:
@@ -171,7 +171,7 @@ async def hybrid_search(client: OpenSearch, query: str, query_vector: list[float
             index=index_name,
             body=body,
             params=params,
-            request_timeout=20,  # slightly higher for hybrid (two sub-queries)
+            request_timeout=45,  
         )
         return _parse_response(raw, SearchMode.hybrid)
     except Exception as exc:

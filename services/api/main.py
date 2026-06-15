@@ -54,7 +54,7 @@ def _create_os_client() -> OpenSearch:
         use_ssl=settings.opensearch_use_ssl,
         verify_certs=settings.opensearch_verify_certs,
         ssl_show_warn=False,
-        timeout=30,
+        timeout=60,
         retry_on_timeout=True,
         max_retries=3,
         connection_class=RequestsHttpConnection,
