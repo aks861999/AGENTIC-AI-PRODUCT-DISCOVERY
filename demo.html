@@ -219,23 +219,30 @@
   function formatResults(results) {
     if (!results || results.length === 0) return '';
 
-    const cards = results.slice(0, 5).map(p => `
-      <div class="flex items-start gap-3 bg-white p-3 rounded-xl shadow-sm border border-gray-100 mb-2 max-w-full">
-        <img src="${p.primary_image_url || 'https://placehold.co/80x80?text=No+Image'}" 
-            alt="${p.title || 'Product'}" 
-            onerror="this.src='https://placehold.co/80x80?text=No+Image'"
-            class="w-16 h-16 object-cover rounded-lg flex-shrink-0 bg-gray-100">
-        <div class="flex-1 min-w-0">
-          <div class="font-semibold text-sm text-gray-900 leading-tight">${p.title || 'Unnamed Product'}</div>
-          <div class="text-indigo-600 font-bold text-sm mt-1">
-            ${p.price != null ? '€' + p.price.toFixed(2) : 'Price N/A'}
-          </div>
-          ${p.average_rating ? `<div class="text-xs text-amber-500 mt-1">★ ${p.average_rating}</div>` : ''}
-        </div>
+  const cards = results.slice(0, 5).map(p => {
+    // Format bullet points as inline feature chips
+    const bullets = (p.bullet_points || []).slice(0, 3).map(b => 
+      `<span class="inline-block bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded mr-1 mb-1">${b}</span>`
+    ).join('');
+    
+    // Format key attributes
+    const attrs = (p.attributes || []).slice(0, 4).map(a => 
+      `<span class="inline-block bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded mr-1 mb-1">${a.name}: ${a.value}</span>`
+    ).join('');
+    
+    return `
+    <div class="flex items-start gap-3 bg-white p-3 rounded-xl shadow-sm border border-gray-100 mb-2 max-w-full">
+      <img src="${p.primary_image_url || 'https://placehold.co/80x80?text=No+Image'}" 
+          alt="${p.title || 'Product'}" 
+          onerror="this.src='https://placehold.co/80x80?text=No+Image'"
+          class="w-16 h-16 object-cover rounded-lg flex-shrink-0 bg-gray-100">
+      <div class="flex-1 min-w-0">
+        <div class="font-semibold text-sm text-gray-900 leading-tight">${p.title || 'Unnamed Product'}</div>
+        <div class="flex flex-wrap mt-1">${bullets}</div>
+        <div class="flex flex-wrap mt-1">${attrs}</div>
       </div>
-    `).join('');
-
-    return '<div class="mt-3 space-y-2">' + cards + '</div>';
+    </div>
+  `}).join('');
   }
 
   form.addEventListener('submit', async (e) => {

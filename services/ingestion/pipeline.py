@@ -51,77 +51,78 @@ def preprocess_record(row: dict) -> tuple[dict, str] | None:
 
     raw_description = _safe_str(row.get("product_description"))
     raw_attributes = row.get("raw_attributes", [])
-    
+
     bullets = []
     clean_attributes = []
-    
-    # Isolate formatting bullets from standard technical specifications
+
     for attr in raw_attributes:
         name = _safe_str(attr.get("name"))
         val = _safe_str(attr.get("value"))
         if not name or not val:
             continue
-            
         if name.startswith("Bullet"):
-            bullets.append((name, val))
+            bullets.append(val)  # just collect values, not (name, val) tuples
         else:
             clean_attributes.append({"name": name, "value": val})
-            
-    # Sort bullets to maintain structural boundary parsing sequence
-    bullets.sort(key=lambda x: x[0])
-    
-    # Clean up concatenated text running into description segments
-    clean_description = raw_description
-    for _, bullet_val in bullets:
-        if bullet_val and bullet_val in clean_description:
-            clean_description = clean_description.replace(bullet_val, f" {bullet_val} ")
-            
-    # Normalize structural spacing
+
+    # Sort by original BulletNN order to preserve sequence
+    bullets.sort()  # Bullet01, Bullet02, ...
+
+    # Dedupe: remove bullets that already appear in the description
+    unique_bullets = []
+    desc_lower = raw_description.lower()
+    for b in bullets:
+        if b.lower() not in desc_lower:
+            unique_bullets.append(b)
+
+    # Build clean description: original desc + any bullets not already present
+    if unique_bullets:
+        bullet_text = " ".join(unique_bullets)
+        clean_description = f"{raw_description} {bullet_text}".strip()
+    else:
+        clean_description = raw_description
+
     clean_description = " ".join(clean_description.split())
 
-    title = clean_description[:100] + "..." if len(clean_description) > 100 else clean_description
-    
-    # Build context array optimized for the embedding transformer model
+    # Build title from first bullet or first 80 chars of description
+    # (Home Depot has no explicit title field)
+    if bullets:
+        title = bullets[0][:120]
+    else:
+        title = clean_description[:120]
+
+    # Build embedding text: description + bullet points + structured attributes
     attr_text = " ".join([f"{a['name']}: {a['value']}" for a in clean_attributes])
-    embedding_text = " ".join(filter(None, [clean_description, attr_text]))
-    
+    embedding_text = " ".join(filter(None, [clean_description, " ".join(bullets), attr_text]))
+
     doc = {
         "_id": product_uid,
         "product_uid": product_uid,
         "title": title,
         "product_description": clean_description,
+        "bullet_points": bullets,           # NEW: searchable bullet text array
         "attributes": clean_attributes,
     }
-    doc["_content_hash"] = content_hash(doc)
     return doc, embedding_text
 
 def build_bulk_actions(
     docs: list[dict], vectors: list[list[float]], index_name: str, client: OpenSearch
 ) -> Iterator[dict]:
-    ids = [doc["_id"] for doc in docs]
-    existing = client.mget(index=index_name, body={"ids": ids})
-    hash_map = {
-        hit["_id"]: hit["_source"].get("_content_hash")
-        for hit in existing["docs"]
-        if hit.get("found")
-    }
-
-    skipped = 0
+    """Build bulk actions with idempotent index (upsert semantics).
+    
+    NOTE: Content-hash deduplication removed for free-tier compatibility.
+    On t3.small, mget() per batch adds ~100ms latency and memory pressure.
+    For incremental updates, use index aliases and full reindex instead.
+    """
     for doc, vector in zip(docs, vectors):
-        if hash_map.get(doc["_id"]) == doc["_content_hash"]:
-            skipped += 1
-            continue
-        
+        # Use _id from doc; OpenSearch will update if exists
         action = {
             "_index": index_name,
             "_id": doc["_id"],
-            "_source": {k: v for k, v in doc.items() if k != "_id"},
+            "_source": {k: v for k, v in doc.items() if k != "_id" and k != "_content_hash"},
         }
         action["_source"]["embedding_vector"] = vector
         yield action
-
-    if skipped:
-        logger.info("Skipped %d unchanged documents in this batch.", skipped)
 
 # ── OpenSearch setup ──────────────────────────────────────────────────────────
 
@@ -140,6 +141,9 @@ def get_client(settings) -> OpenSearch:
         timeout=60,
         retry_on_timeout=True,
         max_retries=3,
+        connection_class="requests",
+        pool_maxsize=10,
+        pool_block=False,
     )
 
 
@@ -243,33 +247,57 @@ def run_pipeline() -> None:
 
     # Temporarily set refresh interval to off to accelerate batch execution performance
     client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "-1"}})
+    logger.info("Refresh interval disabled for bulk indexing.")
 
-    accumulated_docs: list[dict] = []
-    accumulated_vectors: list[list[float]] = []
+    try:
 
-    for batch_start in range(0, len(docs), settings.embedding_batch_size):
-        batch_docs = docs[batch_start : batch_start + settings.embedding_batch_size]
-        batch_texts = embedding_texts[batch_start : batch_start + settings.embedding_batch_size]
+        accumulated_docs: list[dict] = []
+        accumulated_vectors: list[list[float]] = []
 
-        vectors = model.encode(
-            batch_texts,
-            batch_size=settings.embedding_batch_size,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        ).tolist()
+        for batch_start in range(0, len(docs), settings.embedding_batch_size):
+            batch_docs = docs[batch_start : batch_start + settings.embedding_batch_size]
+            batch_texts = embedding_texts[batch_start : batch_start + settings.embedding_batch_size]
 
-        accumulated_docs.extend(batch_docs)
-        accumulated_vectors.extend(vectors)
+            vectors = model.encode(
+                batch_texts,
+                batch_size=settings.embedding_batch_size,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            ).tolist()
 
-        # Flush to OpenSearch when we have enough for a bulk chunk
-        while len(accumulated_docs) >= settings.chunk_size:
-            chunk_docs = accumulated_docs[: settings.chunk_size]
-            chunk_vecs = accumulated_vectors[: settings.chunk_size]
-            accumulated_docs = accumulated_docs[settings.chunk_size :]
-            accumulated_vectors = accumulated_vectors[settings.chunk_size :]
+            accumulated_docs.extend(batch_docs)
+            accumulated_vectors.extend(vectors)
 
+            # Flush to OpenSearch when we have enough for a bulk chunk
+            while len(accumulated_docs) >= settings.chunk_size:
+                chunk_docs = accumulated_docs[: settings.chunk_size]
+                chunk_vecs = accumulated_vectors[: settings.chunk_size]
+                accumulated_docs = accumulated_docs[settings.chunk_size :]
+                accumulated_vectors = accumulated_vectors[settings.chunk_size :]
+
+                actions = list(
+                    build_bulk_actions(chunk_docs, chunk_vecs, settings.index_name, client)
+                )
+                success, errors = helpers.bulk(
+                    client,
+                    actions,
+                    chunk_size=settings.chunk_size,
+                    raise_on_error=False,
+                    request_timeout=120,
+                )
+                total_indexed += success
+                total_errors += len(errors) if isinstance(errors, list) else 0
+                logger.info(
+                    "Bulk chunk: %d indexed, %d errors | total indexed so far: %d",
+                    success,
+                    len(errors) if isinstance(errors, list) else 0,
+                    total_indexed,
+                )
+
+        # Flush remaining records
+        if accumulated_docs:
             actions = list(
-                build_bulk_actions(chunk_docs, chunk_vecs, settings.index_name, client)
+                build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name, client)
             )
             success, errors = helpers.bulk(
                 client,
@@ -281,33 +309,14 @@ def run_pipeline() -> None:
             total_indexed += success
             total_errors += len(errors) if isinstance(errors, list) else 0
             logger.info(
-                "Bulk chunk: %d indexed, %d errors | total indexed so far: %d",
-                success,
+                "Final bulk flush: %d indexed, %d errors.", success,
                 len(errors) if isinstance(errors, list) else 0,
-                total_indexed,
             )
 
-    # Flush remaining records
-    if accumulated_docs:
-        actions = list(
-            build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name, client)
-        )
-        success, errors = helpers.bulk(
-            client,
-            actions,
-            chunk_size=settings.chunk_size,
-            raise_on_error=False,
-            request_timeout=120,
-        )
-        total_indexed += success
-        total_errors += len(errors) if isinstance(errors, list) else 0
-        logger.info(
-            "Final bulk flush: %d indexed, %d errors.", success,
-            len(errors) if isinstance(errors, list) else 0,
-        )
-
+    finally:
     # Restore standard search parameters
-    client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "1s"}})
+        client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "1s"}})
+        logger.info("Refresh interval restored to 1s.")
     client.indices.forcemerge(index=settings.index_name, max_num_segments=1)
     
     logger.info(

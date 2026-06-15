@@ -29,17 +29,14 @@ logger = logging.getLogger(__name__)
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a product search query parser for an e-commerce platform.
+SYSTEM_PROMPT = """You are a product search query parser for a home improvement product catalog.
 Your task is to extract structured search parameters from the user's natural language query.
 
-Output ONLY valid JSON matching this exact schema , no markdown, no explanation:
+Output ONLY valid JSON matching this exact schema — no markdown, no explanation:
 {{
   "semantic_query": "<string: the core product description to search for>",
   "filters": {{
-    "main_category": "<string or null>",
-    "price_min": <number or null>,
-    "price_max": <number or null>,
-    "rating_min": <number or null>
+    "attributes": {{"<AttributeName>": "<AttributeValue>"}}
   }},
   "boost_terms": ["<keyword1>", "<keyword2>"],
   "search_mode": "hybrid"
@@ -47,10 +44,11 @@ Output ONLY valid JSON matching this exact schema , no markdown, no explanation:
 
 Rules:
 - semantic_query must be a clean, descriptive phrase (not the raw user input)
-- Extract price ranges from phrases like "under $30", "between $10 and $50", "cheap"
-- Extract rating hints from phrases like "highly rated", "best", "top rated" (use 4.0)
-- boost_terms are important qualitative keywords from the query (e.g. "organic", "sulfate-free")
-- If a field is not mentioned, set it to null (filters) or empty list (boost_terms)
+- Extract product attributes from phrases like "12 gauge steel", "galvanized", "3 inch width"
+  and map them to the attributes filter. Common Home Depot attributes: Gauge, Material,
+  Product Width, Product Height, Product Depth, MFG Brand Name.
+- boost_terms are important qualitative keywords from the query (e.g. "galvanized", "heavy-duty")
+- If no attributes are mentioned, use an empty object {{}} for attributes
 - search_mode is always "hybrid"
 """
 
@@ -92,12 +90,12 @@ def _dict_to_parsed_query(data: dict) -> ParsedNLQuery:
     if not isinstance(raw_filters, dict):
         raw_filters = {}
 
-    filters = NLFilters(
-        main_category=raw_filters.get("main_category"),
-        price_min=raw_filters.get("price_min"),
-        price_max=raw_filters.get("price_max"),
-        rating_min=raw_filters.get("rating_min"),
-    )
+    # Home Depot: only attribute-based filters (no price, rating, category)
+    attr_filters = raw_filters.get("attributes") or {}
+    if not isinstance(attr_filters, dict):
+        attr_filters = {}
+
+    filters = NLFilters(attributes=attr_filters)
 
     mode_str = data.get("search_mode", "hybrid")
     try:
@@ -159,50 +157,50 @@ def get_nl_chain():
 
 
 def _stub_parse(query: str) -> ParsedNLQuery:
-    """
-    Minimal offline query parser used when no LLM is available.
-
-    Performs simple keyword extraction for common patterns.
-    """
+    """Minimal offline query parser for Home Depot hardware products."""
     import re
 
     text = query.lower()
-    filters = NLFilters()
+    attr_filters: dict[str, str] = {}
 
-    # Price extraction
-    m = re.search(r"under\s*\$?(\d+(?:\.\d+)?)", text)
+    # Attribute extraction for hardware products
+    # Gauge extraction: "12 gauge", "12-gauge"
+    m = re.search(r"(\d+)(?:\s*-?\s*gauge)\b", text)
     if m:
-        filters.price_max = float(m.group(1))
+        attr_filters["Gauge"] = m.group(1)
 
-    m = re.search(r"over\s*\$?(\d+(?:\.\d+)?)", text)
+    # Material extraction: "galvanized steel", "stainless steel", "zinc coated"
+    m = re.search(r"(galvanized|stainless|zinc\s*coated|powder\s*coated)\s+steel", text)
     if m:
-        filters.price_min = float(m.group(1))
+        attr_filters["Material"] = f"{m.group(1).title()} Steel"
 
-    m = re.search(r"between\s*\$?(\d+(?:\.\d+)?)\s*(?:and|to|-)\s*\$?(\d+(?:\.\d+)?)", text)
+    # Dimension extraction: "3 inch", "3 in.", "1-1/2 in"
+    m = re.search(r"(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:x\s*(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?))?\s*(?:x\s*(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?))?", text)
     if m:
-        filters.price_min = float(m.group(1))
-        filters.price_max = float(m.group(2))
+        # Simplified: just capture width hint
+        attr_filters["Product Width (in.)"] = m.group(1)
 
-    # Rating extraction
-    if any(kw in text for kw in ["top rated", "highly rated", "best", "4 star", "5 star"]):
-        filters.rating_min = 4.0
+    # Brand extraction
+    m = re.search(r"(simpson strong-tie|everbilt|husky|ryobi|dewalt)", text, re.IGNORECASE)
+    if m:
+        attr_filters["MFG Brand Name"] = m.group(1).title()
 
-    # Strip price/rating phrases to get semantic core
-    semantic = re.sub(r"(under|over|below|above|between)\s*\$?\d+(?:\.\d+)?(\s*(and|to|-)\s*\$?\d+(?:\.\d+)?)?", "", query)
-    semantic = re.sub(r"(top rated|highly rated|cheap|affordable|budget|best|affordable)", "", semantic, flags=re.IGNORECASE)
+    # Strip attribute phrases to get semantic core
+    semantic = re.sub(r"(\d+\s*-?\s*gauge)", "", query, flags=re.IGNORECASE)
+    semantic = re.sub(r"(galvanized|stainless|zinc\s*coated)\s+steel", "", semantic, flags=re.IGNORECASE)
+    semantic = re.sub(r"(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:x\s*\d+.*?inch)?", "", semantic, flags=re.IGNORECASE)
     semantic = re.sub(r"\s+", " ", semantic).strip()
 
-    # Boost terms: adjectives like organic, natural, sulfate-free, etc.
-    boost_pattern = r"\b(organic|natural|vegan|cruelty.free|sulfate.free|paraben.free|hydrating|moisturizing|anti.aging)\b"
+    # Boost terms: hardware-specific quality descriptors
+    boost_pattern = r"\b(galvanized|heavy-duty|structural|outdoor|corrosion-resistant|zmax|strong-drive)\b"
     boost_terms = re.findall(boost_pattern, query, re.IGNORECASE)
 
     return ParsedNLQuery(
         semantic_query=semantic or query,
-        filters=filters,
+        filters=NLFilters(attributes=attr_filters),
         boost_terms=boost_terms,
         search_mode=SearchMode.hybrid,
     )
-
 
 async def parse_nl_query(query: str) -> ParsedNLQuery:
     """
@@ -266,17 +264,14 @@ async def nl_search(
 
     # Step 3: Execute hybrid search
     result = await hybrid_search(
-        client=client,
-        query=semantic_q,
-        query_vector=vector,
-        index_name=index_name,
-        category=parsed.filters.main_category,
-        min_price=parsed.filters.price_min,
-        max_price=parsed.filters.price_max,
-        min_rating=parsed.filters.rating_min,
-        boost_terms=parsed.boost_terms if parsed.boost_terms else None,
-        size=size,
-    )
+            client=client,
+            query=semantic_q,
+            query_vector=vector,
+            index_name=index_name,
+            required_attributes=parsed.filters.attributes if parsed.filters.attributes else None,
+            boost_terms=parsed.boost_terms if parsed.boost_terms else None,
+            size=size,
+        )
 
     return NLSearchResponse(
         total=result.total,

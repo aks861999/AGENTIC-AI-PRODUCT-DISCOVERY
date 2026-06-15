@@ -21,6 +21,8 @@ INDEX_SETTINGS: dict = {
             "knn": True,
             "number_of_shards": 1,
             "number_of_replicas": 0,
+            "mapping.total_fields.limit": 1000,
+            "max_result_window": 10000,  
         },
         "analysis": {
             "tokenizer": {
@@ -70,6 +72,10 @@ INDEX_SETTINGS: dict = {
                 "type": "text",
                 "analyzer": "product_analyzer",
             },
+            "bullet_points": {
+                "type": "text",
+                "analyzer": "product_analyzer",
+            },
             "attributes": {
                 "type": "nested",
                 "properties": {
@@ -91,8 +97,8 @@ INDEX_SETTINGS: dict = {
                     "engine": "faiss",
                     "space_type": "innerproduct",
                     "parameters": {
-                        "ef_construction": 128,
-                        "m": 16,
+                        "ef_construction": 64,
+                        "m": 8,
                     },
                 },
             },

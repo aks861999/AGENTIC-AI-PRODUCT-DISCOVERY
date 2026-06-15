@@ -24,7 +24,7 @@ from api.models import (
 from api.nl_query import nl_search
 from api.search import hybrid_search, lexical_search, semantic_search
 from api.chatbot import chat_turn
-from api.cart import CheckoutSession, Order, create_checkout_session, add_line_item, get_session, complete_checkout
+from api.cart import create_checkout_session, add_line_item, get_session, complete_checkout
 import api.dependencies as _deps
 from shared.config.settings import get_settings
 
@@ -53,6 +53,9 @@ def _create_os_client() -> OpenSearch:
         timeout=30,
         retry_on_timeout=True,
         max_retries=3,
+        connection_class="requests",
+        pool_maxsize=10,
+        pool_block=False,
     )
 
 @asynccontextmanager

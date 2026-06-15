@@ -54,6 +54,7 @@ class ProductHit(BaseModel):
     product_uid:         str                    = Field(..., description="Home Depot Product UID")
     title:               str                    = Field(default="")
     product_description: str                    = Field(default="")
+    bullet_points:       list[str]              = Field(default_factory=list, description="Extracted Bullet01-N text")
     attributes:          list[ProductAttribute] = Field(default_factory=list)
 
     @classmethod
@@ -65,6 +66,7 @@ class ProductHit(BaseModel):
             product_uid=source.get("product_uid", hit["_id"]),
             title=source.get("title", ""),
             product_description=source.get("product_description", ""),
+            bullet_points=source.get("bullet_points", []),
             attributes=source.get("attributes", []),
         )
 
