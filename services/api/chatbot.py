@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 from opensearchpy import OpenSearch
 from sentence_transformers import SentenceTransformer
 from api.search import hybrid_search
+from api.nl_query import parse_nl_query
 from api.cart import create_checkout_session, complete_checkout
 from shared.config.settings import get_settings
 import api.dependencies as deps
@@ -101,14 +102,25 @@ async def search_products(query: str) -> str:
         return json.dumps({"text": "Search is temporarily unavailable.", "products": []})
 
     try:
+        # Extract filters, boost terms, and semantic core from the NL query
+        parsed = await parse_nl_query(query)
+        search_q = parsed.semantic_query or query
+
+        logger.info(
+            "search_products: query=%r | parsed_semantic=%r | filters=%s | boost=%s",
+            query, search_q, parsed.filters.attributes, parsed.boost_terms,
+        )
+
         vector = await asyncio.to_thread(
-            lambda: model.encode(query, normalize_embeddings=True).tolist()
+            lambda: model.encode(search_q, normalize_embeddings=True).tolist()
         )
         result = await hybrid_search(
             client=client,
-            query=query,
+            query=search_q,
             query_vector=vector,
             index_name=settings.index_name,
+            required_attributes=parsed.filters.attributes if parsed.filters.attributes else None,
+            boost_terms=parsed.boost_terms if parsed.boost_terms else None,
             size=5,
         )
         if not result.hits:
