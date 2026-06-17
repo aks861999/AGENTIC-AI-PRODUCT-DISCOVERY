@@ -283,7 +283,7 @@ async def _get_candidate_attribute_names(
     # 2. Do a lightweight kNN search (no filters) to get candidate products
     try:
         knn_query = {
-            "size": 20,  # Small number — we just need representative attribute names
+            "size": 50,  # Small number — we just need representative attribute names
             "_source": ["attributes.name"],  # Only fetch attribute names, nothing else
             "query": {
                 "knn": {

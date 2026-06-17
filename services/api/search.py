@@ -32,7 +32,7 @@ def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) 
                     "query": {
                         "bool": {
                             "must": [
-                                {"term": {"attributes.name.keyword": attr_name}},
+                                {"term": {"attributes.name": attr_name}},
                                 {
                                     "bool": {
                                         "should": [
@@ -148,7 +148,7 @@ def _build_hybrid_query(query: str, query_vector: list[float], filters: list[dic
         }
     }
 
-    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 20}}}
+    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 50}}}
     if filters:
         knn_sub["knn"]["embedding_vector"]["filter"] = {"bool": {"filter": filters}}
 
