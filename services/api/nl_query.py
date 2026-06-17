@@ -256,130 +256,164 @@ async def parse_nl_query(query: str) -> ParsedNLQuery:
         logger.error("LLM chain failed: %s , falling back to stub parser.", exc)
         return _stub_parse(query)
 
+def _normalize_attr_token(s: str) -> str:
+    """Lowercase + collapse punctuation, for loose attribute-name comparison."""
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Targeted attribute name resolution (from candidate products, not ALL attributes)
-# ═══════════════════════════════════════════════════════════════════════════════
 
-async def _get_candidate_attribute_names(
-    client,
-    index_name: str,
-    semantic_query: str,
-    model,
+def _find_candidate_attr_names(
+    extracted: str, actual_names: list[str], max_candidates: int = 3
 ) -> list[str]:
     """
-    Fetch attribute names from candidate products matching the semantic query.
-
-    Instead of fetching ALL attribute names from the index (naive),
-    we do a lightweight semantic search to find products matching the query,
-    then extract attribute names only from those products.
-    This gives a targeted, relevant subset of attribute names.
+    Resolve an LLM-extracted attribute name against real indexed names using a
+    layered strategy. Returns candidates ordered best-first; empty if nothing
+    plausible. Replaces the old single-shot difflib-only _find_best_attr_name.
     """
-    # 1. Encode the semantic query
+    if not actual_names:
+        return []
+
+    # 1. Exact match
+    if extracted in actual_names:
+        return [extracted]
+
+    # 2. Case-insensitive exact match
+    lower_map: dict[str, str] = {}
+    for n in actual_names:
+        lower_map.setdefault(n.lower(), n)
+    if extracted.lower() in lower_map:
+        return [lower_map[extracted.lower()]]
+
+    norm_extracted = _normalize_attr_token(extracted)
+
+    # 3. Substring containment — fixes "Color" -> "Color/Finish"
+    contains: list[tuple[float, str]] = []
+    for name in actual_names:
+        norm_name = _normalize_attr_token(name)
+        if norm_extracted and (norm_extracted in norm_name or norm_name in norm_extracted):
+            score = min(len(norm_extracted), len(norm_name)) / max(len(norm_extracted), len(norm_name))
+            contains.append((score, name))
+
+    # 4. Token overlap — fixes "Coverage Sq Ft" -> "Coverage Area (sq. ft.)"
+    extracted_tokens = set(norm_extracted.split())
+    overlap: list[tuple[float, str]] = []
+    for name in actual_names:
+        name_tokens = set(_normalize_attr_token(name).split())
+        if not extracted_tokens or not name_tokens:
+            continue
+        shared = extracted_tokens & name_tokens
+        if shared:
+            overlap.append((len(shared) / max(len(extracted_tokens), len(name_tokens)), name))
+
+    ranked = contains + overlap
+    if ranked:
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for score, name in ranked:
+            if name not in seen and score >= 0.3:
+                seen.add(name)
+                ordered.append(name)
+        if ordered:
+            return ordered[:max_candidates]
+
+    # 5. Fuzzy fallback — typos / minor spelling drift
+    fuzzy = difflib.get_close_matches(extracted, actual_names, n=max_candidates, cutoff=0.6)
+    return fuzzy or []
+
+
+def _disambiguate_by_value(
+    candidates: list[str], attr_map: dict[str, set[str]], requested_value: str
+) -> str:
+    """
+    When >1 attribute-name candidate is plausible (e.g. "Color" could be
+    "Color/Finish" or "Color Family"), prefer whichever candidate actually
+    carries the requested value among the candidate products.
+    """
+    requested_norm = requested_value.strip().lower()
+
+    for name in candidates:
+        if requested_norm in {v.strip().lower() for v in attr_map.get(name, set())}:
+            return name
+
+    for name in candidates:  # loose partial-value check
+        for v in attr_map.get(name, set()):
+            v_norm = v.strip().lower()
+            if requested_norm in v_norm or v_norm in requested_norm:
+                return name
+
+    return candidates[0]  # nothing matched on value — trust name confidence order
+
+
+async def _get_candidate_attribute_map(
+    client, index_name: str, semantic_query: str, model,
+) -> dict[str, set[str]]:
+    """
+    Like the old _get_candidate_attribute_names, but also keeps each name's
+    observed values so the resolver can disambiguate, not just rename.
+    """
     query_vector: list[float] = await asyncio.to_thread(
         lambda: model.encode(semantic_query, normalize_embeddings=True).tolist()
     )
 
-    # 2. Do a lightweight kNN search (no filters) to get candidate products
     try:
         knn_query = {
-            "size": 50,  # Small number — we just need representative attribute names
-            "_source": ["attributes.name"],  # Only fetch attribute names, nothing else
-            "query": {
-                "knn": {
-                    "embedding_vector": {
-                        "vector": query_vector,
-                        "k": 50
-                    }
-                }
-            }
+            "size": 50,
+            "_source": ["attributes.name", "attributes.value"],
+            "query": {"knn": {"embedding_vector": {"vector": query_vector, "k": 50}}},
         }
         raw = await asyncio.to_thread(
-            client.search,
-            index=index_name,
-            body=knn_query,
-            request_timeout=10,
+            client.search, index=index_name, body=knn_query, request_timeout=10,
         )
     except Exception as exc:
         logger.warning("Failed to fetch candidate attributes: %s", exc)
-        return []
+        return {}
 
-    # 3. Extract unique attribute names from candidate products
-    attr_names: set[str] = set()
+    attr_map: dict[str, set[str]] = {}
     hits = raw.get("hits", {}).get("hits", [])
     for hit in hits:
-        source = hit.get("_source", {})
-        for attr in source.get("attributes", []):
-            name = attr.get("name", "")
+        for attr in hit.get("_source", {}).get("attributes", []):
+            name, value = attr.get("name", ""), attr.get("value", "")
             if name:
-                attr_names.add(name)
+                attr_map.setdefault(name, set())
+                if value:
+                    attr_map[name].add(value)
 
     logger.debug(
         "Extracted %d unique attribute names from %d candidate products for query '%s'",
-        len(attr_names), len(hits), semantic_query
+        len(attr_map), len(hits), semantic_query,
     )
-    return sorted(attr_names)
-
-
-def _find_best_attr_name(extracted: str, actual_names: list[str]) -> str | None:
-    """Resolve an LLM-extracted attribute name to the best match from candidates."""
-    if not actual_names:
-        return None
-
-    # Exact match (case-sensitive)
-    if extracted in actual_names:
-        return extracted
-
-    # Case-insensitive exact match
-    lower_map = {n.lower(): n for n in actual_names}
-    if extracted.lower() in lower_map:
-        return lower_map[extracted.lower()]
-
-    # Fuzzy match — Ratcliff/Obershelp similarity (cutoff=0.6 for precision)
-    matches = difflib.get_close_matches(extracted, actual_names, n=1, cutoff=0.6)
-    if matches:
-        logger.debug("Fuzzy-matched attribute '%s' -> '%s'", extracted, matches[0])
-        return matches[0]
-
-    return None
+    return attr_map
 
 
 async def _resolve_attribute_filters(
-    client,
-    index_name: str,
-    semantic_query: str,
-    model,
+    client, index_name: str, semantic_query: str, model,
     required_attributes: Optional[dict[str, str]],
 ) -> Optional[dict[str, str]]:
     """
-    Map LLM-extracted attribute names to actual indexed attribute names.
-
-    Uses candidate-product-based resolution instead of fetching ALL attributes.
-    Called ONCE in nl_search() — NOT repeated in search.py functions.
+    Map LLM-extracted attribute names to actual indexed names, disambiguating
+    by value when more than one indexed name is plausible.
     """
     if not required_attributes:
         return None
 
-    # Get relevant attribute names from candidate products
-    actual_names = await _get_candidate_attribute_names(
-        client, index_name, semantic_query, model
-    )
-    if not actual_names:
-        return required_attributes  # passthrough if we can't fetch candidates
+    attr_map = await _get_candidate_attribute_map(client, index_name, semantic_query, model)
+    if not attr_map:
+        return required_attributes
 
+    actual_names = list(attr_map.keys())
     resolved: dict[str, str] = {}
     for extracted_name, value in required_attributes.items():
-        best = _find_best_attr_name(extracted_name, actual_names)
-        if best:
-            resolved[best] = value
-        else:
-            resolved[extracted_name] = value  # keep original as fallback
+        candidates = _find_candidate_attr_names(extracted_name, actual_names)
+        if not candidates:
+            resolved[extracted_name] = value
+            continue
+        best = candidates[0] if len(candidates) == 1 else _disambiguate_by_value(candidates, attr_map, value)
+        resolved[best] = value
 
     if resolved != required_attributes:
         logger.info("Resolved filters %s -> %s", required_attributes, resolved)
 
     return resolved
-
 
 async def nl_search(
     client,

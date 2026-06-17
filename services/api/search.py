@@ -16,14 +16,12 @@ logger = logging.getLogger(__name__)
 
 def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) -> list[dict]:
     """
-    Dynamically build nested filters for Home Depot attributes.
-
-    Uses keyword matching on both name and value. The value field
-    has a .keyword subfield for exact matching AND text analysis
-    for more flexible matching (e.g., "8.5 in" vs "8.5 inch").
+    Each attribute/value pair, layered:
+      1. exact keyword match (normalizer handles case once reindexed)
+      2. analyzed phrase match (handles "8.5 in" vs "8.5 inch")
+      3. fuzzy match on the keyword field (typos / minor format drift)
     """
     filters: list[dict] = []
-
     if required_attributes:
         for attr_name, attr_value in required_attributes.items():
             filters.append({
@@ -33,21 +31,26 @@ def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) 
                         "bool": {
                             "must": [
                                 {"term": {"attributes.name": {"value": attr_name, "case_insensitive": True}}},
-                                #{"match": {"attributes.name": attr_name}},
                                 {
                                     "bool": {
                                         "should": [
-                                            # Try exact keyword match first
                                             {"term": {"attributes.value.keyword": attr_value}},
-                                            # Fallback: match on analyzed text (handles "8.5 in" vs "8.5 inch")
-                                            {"match_phrase": {"attributes.value": attr_value}}
+                                            {"match_phrase": {"attributes.value": attr_value}},
+                                            {
+                                                "fuzzy": {
+                                                    "attributes.value.keyword": {
+                                                        "value": attr_value,
+                                                        "fuzziness": "AUTO",
+                                                    }
+                                                }
+                                            },
                                         ],
-                                        "minimum_should_match": 1
+                                        "minimum_should_match": 1,
                                     }
-                                }
+                                },
                             ]
                         }
-                    }
+                    },
                 }
             })
     return filters
@@ -178,27 +181,45 @@ async def semantic_search(client: OpenSearch, query_vector: list[float], index_n
     raw = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=25)
     return _parse_response(raw, SearchMode.semantic)
 
-async def hybrid_search(client: OpenSearch, query: str, query_vector: list[float], index_name: str, required_attributes: Optional[dict[str, str]] = None, boost_terms: Optional[list[str]] = None, size: int = 10, from_: int = 0) -> SearchResponse:
-    filters = _build_filter_clauses(required_attributes)
-    body = _build_hybrid_query(query, query_vector, filters, boost_terms, size, from_)
-    params = {"search_pipeline": HYBRID_PIPELINE_ID, "timeout": "15s"}
+async def hybrid_search(
+    client: OpenSearch,
+    query: str,
+    query_vector: list[float],
+    index_name: str,
+    required_attributes: Optional[dict[str, str]] = None,
+    boost_terms: Optional[list[str]] = None,
+    size: int = 10,
+    from_: int = 0,
+) -> SearchResponse:
+    attrs_to_try = dict(required_attributes) if required_attributes else {}
+    dropped: list[str] = []
 
-    try:
-        raw = await asyncio.to_thread(
-            client.search,
-            index=index_name,
-            body=body,
-            params=params,
-            request_timeout=45,
-        )
-        return _parse_response(raw, SearchMode.hybrid)
-    except Exception as exc:
-        logger.warning("Hybrid execution failed (%s); reverting to lexical fallback.", exc)
-        body2 = _build_lexical_query(query, filters, boost_terms, size, from_)
-        raw = await asyncio.to_thread(
-            client.search,
-            index=index_name,
-            body=body2,
-            request_timeout=15,
-        )
-        return _parse_response(raw, SearchMode.lexical)
+    while True:
+        filters = _build_filter_clauses(attrs_to_try or None)
+        body = _build_hybrid_query(query, query_vector, filters, boost_terms, size, from_)
+        params = {"search_pipeline": HYBRID_PIPELINE_ID, "timeout": "15s"}
+
+        try:
+            raw = await asyncio.to_thread(
+                client.search, index=index_name, body=body, params=params, request_timeout=45,
+            )
+            response = _parse_response(raw, SearchMode.hybrid)
+        except Exception as exc:
+            logger.warning("Hybrid execution failed (%s); reverting to lexical fallback.", exc)
+            body2 = _build_lexical_query(query, filters, boost_terms, size, from_)
+            raw = await asyncio.to_thread(
+                client.search, index=index_name, body=body2, request_timeout=15,
+            )
+            response = _parse_response(raw, SearchMode.lexical)
+
+        if response.total > 0 or not attrs_to_try:
+            if dropped:
+                logger.info("Relaxed filters %s to get results (kept: %s)", dropped, attrs_to_try)
+            return response
+
+        # Zero hits with active filters: drop the most-recently-added one
+        # (treated as least certain) and retry rather than returning empty.
+        last_key = next(reversed(attrs_to_try))
+        dropped.append(last_key)
+        attrs_to_try = {k: v for k, v in attrs_to_try.items() if k != last_key}
+        logger.info("No hits with filters; relaxing by dropping '%s' and retrying.", last_key)
