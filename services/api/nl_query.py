@@ -250,7 +250,34 @@ async def parse_nl_query(query: str) -> ParsedNLQuery:
 
     try:
         raw_output: str = await chain.ainvoke({"query": query})
+
+
+        logger.debug(
+            "[DEBUG][parse_nl_query] Raw LLM output: %r",
+            raw_output
+        )
+
+
+
         parsed_dict = _extract_json(raw_output)
+
+        logger.debug(
+            "[DEBUG][parse_nl_query] Extracted JSON dict: %s",
+            parsed_dict
+        )
+
+
+        logger.info(
+            "[DEBUG][parse_nl_query] FINAL ParsedNLQuery => semantic_query=%r | attributes=%s | boost_terms=%s | mode=%s",
+            parsed_dict.get("semantic_query"),
+            parsed_dict.get("filters", {}).get("attributes", {}),
+            parsed_dict.get("boost_terms"),
+            parsed_dict.get("search_mode"),
+        )
+
+
+
+
         return _dict_to_parsed_query(parsed_dict)
     except Exception as exc:
         logger.error("LLM chain failed: %s , falling back to stub parser.", exc)
@@ -357,9 +384,9 @@ async def _get_candidate_attribute_map(
 
     try:
         knn_query = {
-            "size": 50,
+            "size": 150,
             "_source": ["attributes.name", "attributes.value"],
-            "query": {"knn": {"embedding_vector": {"vector": query_vector, "k": 50}}},
+            "query": {"knn": {"embedding_vector": {"vector": query_vector, "k": 150}}},
         }
         raw = await asyncio.to_thread(
             client.search, index=index_name, body=knn_query, request_timeout=10,

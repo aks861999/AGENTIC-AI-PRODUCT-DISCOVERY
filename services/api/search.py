@@ -152,7 +152,7 @@ def _build_hybrid_query(query: str, query_vector: list[float], filters: list[dic
         }
     }
 
-    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 50}}}
+    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 150}}}
     if filters:
         knn_sub["knn"]["embedding_vector"]["filter"] = {"bool": {"filter": filters}}
 
