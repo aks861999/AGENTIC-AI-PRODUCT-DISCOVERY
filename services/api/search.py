@@ -32,14 +32,15 @@ def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) 
                     "query": {
                         "bool": {
                             "must": [
-                                {"term": {"attributes.name": attr_name}},
+                                {"term": {"attributes.name": {"value": attr_name, "case_insensitive": True}}},
+                                #{"match": {"attributes.name": attr_name}},
                                 {
                                     "bool": {
                                         "should": [
                                             # Try exact keyword match first
                                             {"term": {"attributes.value.keyword": attr_value}},
                                             # Fallback: match on analyzed text (handles "8.5 in" vs "8.5 inch")
-                                            {"match": {"attributes.value": attr_value}},
+                                            {"match_phrase": {"attributes.value": attr_value}}
                                         ],
                                         "minimum_should_match": 1
                                     }

@@ -50,3 +50,5 @@ experiment/*.parquet
 experiment/*.jsonl
 
 search_shopify/
+
+test.py
