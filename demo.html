@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -78,7 +77,7 @@
         <div class="bg-white p-6 rounded-xl shadow">
           <div class="text-3xl mb-3">🧠</div>
           <h3 class="text-xl font-semibold mb-2">Natural Language Understanding</h3>
-          <p class="text-gray-600">Shoppers describe needs naturally (“moisturizer for dry skin under $20”). No keywords required.</p>
+          <p class="text-gray-600">Shoppers describe needs naturally ("moisturizer for dry skin under $20"). No keywords required.</p>
         </div>
         <div class="bg-white p-6 rounded-xl shadow">
           <div class="text-3xl mb-3">⚡</div>
@@ -108,7 +107,7 @@
           <div class="flex items-start gap-2">
             <span class="text-xl">🤖</span>
             <div class="bg-white p-3 rounded-xl shadow-sm max-w-[80%] text-sm">
-              Hi! I can help you find products. Try something like “organic shampoo for curly hair under $15”.
+              Hi! I can help you find products. Try something like "organic shampoo for curly hair under $15".
             </div>
           </div>
         </div>
@@ -168,7 +167,7 @@
   <!-- Contact -->
   <section id="contact" class="py-20 bg-white">
     <div class="max-w-2xl mx-auto text-center px-4">
-      <h2 class="text-3xl font-bold text-gray-800 mb-4">Let’s Talk</h2>
+      <h2 class="text-3xl font-bold text-gray-800 mb-4">Let's Talk</h2>
       <p class="text-gray-600 mb-6">
         Ready to upgrade your e‑commerce search? Drop us a message or email us directly at
         <a href="mailto:hello@ki-productsearch.ai" class="text-indigo-600 underline">hello@ki-productsearch.ai</a>.
@@ -221,19 +220,19 @@
 
   const cards = results.slice(0, 5).map(p => {
     // Format bullet points as inline feature chips
-    const bullets = (p.bullet_points || []).slice(0, 3).map(b => 
+    const bullets = (p.bullet_points || []).slice(0, 3).map(b =>
       `<span class="inline-block bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded mr-1 mb-1">${b}</span>`
     ).join('');
-    
+
     // Format key attributes
-    const attrs = (p.attributes || []).slice(0, 4).map(a => 
+    const attrs = (p.attributes || []).slice(0, 4).map(a =>
       `<span class="inline-block bg-indigo-50 text-indigo-700 text-xs px-2 py-0.5 rounded mr-1 mb-1">${a.name}: ${a.value}</span>`
     ).join('');
-    
+
     return `
     <div class="flex items-start gap-3 bg-white p-3 rounded-xl shadow-sm border border-gray-100 mb-2 max-w-full">
-      <img src="${p.primary_image_url || 'https://placehold.co/80x80?text=No+Image'}" 
-          alt="${p.title || 'Product'}" 
+      <img src="${p.primary_image_url || 'https://placehold.co/80x80?text=No+Image'}"
+          alt="${p.title || 'Product'}"
           onerror="this.src='https://placehold.co/80x80?text=No+Image'"
           class="w-16 h-16 object-cover rounded-lg flex-shrink-0 bg-gray-100">
       <div class="flex-1 min-w-0">

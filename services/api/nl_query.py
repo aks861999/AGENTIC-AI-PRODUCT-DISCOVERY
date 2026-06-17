@@ -13,9 +13,11 @@ The chain is built with LCEL (pipe operator) and is fully async.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import re
+import time
 from typing import Any, Optional
 
 from langchain_core.output_parsers import StrOutputParser
@@ -42,13 +44,21 @@ Output ONLY valid JSON matching this exact schema — no markdown, no explanatio
   "search_mode": "hybrid"
 }}
 
-Rules:
-- semantic_query must be a clean, descriptive phrase (not the raw user input)
-- Extract product attributes from phrases like "12 gauge steel", "galvanized", "3 inch width"
-  and map them to the attributes filter. Common Home Depot attributes: Gauge, Material,
-  Product Width, Product Height, Product Depth, MFG Brand Name.
-- boost_terms are important qualitative keywords from the query (e.g. "galvanized", "heavy-duty")
-- If no attributes are mentioned, use an empty object {{}} for attributes
+CRITICAL RULES FOR ATTRIBUTES:
+- Preserve the EXACT attribute names and values as they appear in the user's query.
+  Example: user says "clamp with Assembled Depth (in.) 8.5 in" -> key MUST be "Assembled Depth (in.)", value MUST be "8.5 in".
+  Example: user says "Clamp Type Pipe" -> key is "Clamp Type", value is "Pipe".
+- Do NOT rename, generalize, or normalize attribute names. If the user wrote "Assembled Depth (in.)",
+  do NOT change it to "Product Depth" or "Depth" — use it EXACTLY.
+- Only infer an attribute name if the user did NOT specify it explicitly.
+  Example: "8.5 inch deep clamp" -> you may infer "Assembled Depth (in.)": "8.5 in".
+- Preserve units in the value (e.g., "8.5 in", "600 lb", "12 gauge").
+- Use the EXACT spelling, capitalization, and punctuation from the query for attribute keys.
+
+Other rules:
+- semantic_query: strip out attribute/value phrases, keep only the product concept (e.g., "clamps")
+- boost_terms: quality keywords like "galvanized", "heavy-duty", "structural"
+- If no attributes are mentioned, use {{}} for attributes
 - search_mode is always "hybrid"
 """
 
@@ -148,6 +158,10 @@ def _build_llm_chain():
 
 _chain = None  # Module-level cached chain
 
+# Cache for attribute names fetched from candidate products
+_attr_name_cache: dict[str, tuple[list[str], float]] = {}
+_ATTR_CACHE_TTL_SEC = 300  # 5 minutes
+
 
 def get_nl_chain():
     global _chain
@@ -157,42 +171,63 @@ def get_nl_chain():
 
 
 def _stub_parse(query: str) -> ParsedNLQuery:
-    """Minimal offline query parser for Home Depot hardware products."""
+    """Minimal offline query parser — preserves exact attribute names from user query."""
     import re
 
     text = query.lower()
     attr_filters: dict[str, str] = {}
 
-    # Attribute extraction for hardware products
-    # Gauge extraction: "12 gauge", "12-gauge"
-    m = re.search(r"(\d+)(?:\s*-?\s*gauge)\b", text)
-    if m:
-        attr_filters["Gauge"] = m.group(1)
+    # ── Exact attribute pattern: "AttrName value" or "AttrName: value" ──
+    # Matches patterns like "Assembled Depth (in.) 8.5 in", "Clamp Type Pipe"
+    # This captures the EXACT attribute name the user typed
+    exact_attr_pattern = r'([A-Z][A-Za-z\s()]+?)\s+([A-Za-z0-9][A-Za-z0-9\s./()-]*)'
+    for match in re.finditer(exact_attr_pattern, query):
+        attr_name = match.group(1).strip()
+        attr_value = match.group(2).strip()
+        # Validate: attribute name should look real (contains letters, reasonable length)
+        if len(attr_name) >= 3 and len(attr_name) <= 60 and len(attr_value) >= 1:
+            attr_filters[attr_name] = attr_value
 
-    # Material extraction: "galvanized steel", "stainless steel", "zinc coated"
-    m = re.search(r"(galvanized|stainless|zinc\s*coated|powder\s*coated)\s+steel", text)
-    if m:
-        attr_filters["Material"] = f"{m.group(1).title()} Steel"
+    # ── Fallback: dimension extraction with INFERRED attribute names ──
+    # Only runs if no exact attributes were found above
+    if not attr_filters:
+        # "X inch deep" / "X in. deep" -> infer "Assembled Depth (in.)"
+        m = re.search(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:deep|depth)', text)
+        if m:
+            attr_filters["Assembled Depth (in.)"] = f"{m.group(1)} in"
 
-    # Dimension extraction: "3 inch", "3 in.", "1-1/2 in"
-    m = re.search(r"(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:x\s*(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?))?\s*(?:x\s*(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?))?", text)
-    if m:
-        # Simplified: just capture width hint
-        attr_filters["Product Width (in.)"] = m.group(1)
+        # "X inch wide" / "X in. wide" -> infer "Assembled Width (in.)"
+        m = re.search(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:wide|width)', text)
+        if m:
+            attr_filters["Assembled Width (in.)"] = f"{m.group(1)} in"
 
-    # Brand extraction
-    m = re.search(r"(simpson strong-tie|everbilt|husky|ryobi|dewalt)", text, re.IGNORECASE)
-    if m:
-        attr_filters["MFG Brand Name"] = m.group(1).title()
+        # "X inch tall" / "X in. tall" / "X inch high" -> infer "Assembled Height (in.)"
+        m = re.search(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:tall|high|height)', text)
+        if m:
+            attr_filters["Assembled Height (in.)"] = f"{m.group(1)} in"
 
-    # Strip attribute phrases to get semantic core
-    semantic = re.sub(r"(\d+\s*-?\s*gauge)", "", query, flags=re.IGNORECASE)
-    semantic = re.sub(r"(galvanized|stainless|zinc\s*coated)\s+steel", "", semantic, flags=re.IGNORECASE)
-    semantic = re.sub(r"(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:x\s*\d+.*?inch)?", "", semantic, flags=re.IGNORECASE)
-    semantic = re.sub(r"\s+", " ", semantic).strip()
+        # "X gauge" -> infer "Gauge"
+        m = re.search(r'(\d+)\s*-?\s*gauge\b', text)
+        if m:
+            attr_filters["Gauge"] = m.group(1)
 
-    # Boost terms: hardware-specific quality descriptors
-    boost_pattern = r"\b(galvanized|heavy-duty|structural|outdoor|corrosion-resistant|zmax|strong-drive)\b"
+        # "stainless steel", "galvanized steel" -> infer "Material"
+        m = re.search(r'(galvanized|stainless|zinc\s*coated|powder\s*coated)\s+steel', text)
+        if m:
+            attr_filters["Material"] = f"{m.group(1).title()} Steel"
+
+    # ── Strip all attribute phrases to get semantic core ──
+    semantic = query
+    # Remove "AttrName value" patterns
+    semantic = re.sub(r'[A-Z][A-Za-z\s()]+?\s+[A-Za-z0-9][A-Za-z0-9\s./()-]*', '', semantic)
+    # Remove dimension phrases
+    semantic = re.sub(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:deep|depth|wide|width|tall|high|height)?', '', semantic, flags=re.IGNORECASE)
+    semantic = re.sub(r'(\d+)\s*-?\s*gauge\b', '', semantic, flags=re.IGNORECASE)
+    semantic = re.sub(r'(galvanized|stainless|zinc\s*coated)\s+steel', '', semantic, flags=re.IGNORECASE)
+    semantic = re.sub(r'\s+', ' ', semantic).strip()
+
+    # Boost terms: quality descriptors
+    boost_pattern = r'\b(galvanized|heavy-duty|structural|outdoor|corrosion-resistant|zmax|strong-drive)\b'
     boost_terms = re.findall(boost_pattern, query, re.IGNORECASE)
 
     return ParsedNLQuery(
@@ -201,6 +236,7 @@ def _stub_parse(query: str) -> ParsedNLQuery:
         boost_terms=boost_terms,
         search_mode=SearchMode.hybrid,
     )
+
 
 async def parse_nl_query(query: str) -> ParsedNLQuery:
     """
@@ -221,6 +257,130 @@ async def parse_nl_query(query: str) -> ParsedNLQuery:
         return _stub_parse(query)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Targeted attribute name resolution (from candidate products, not ALL attributes)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _get_candidate_attribute_names(
+    client,
+    index_name: str,
+    semantic_query: str,
+    model,
+) -> list[str]:
+    """
+    Fetch attribute names from candidate products matching the semantic query.
+
+    Instead of fetching ALL attribute names from the index (naive),
+    we do a lightweight semantic search to find products matching the query,
+    then extract attribute names only from those products.
+    This gives a targeted, relevant subset of attribute names.
+    """
+    # 1. Encode the semantic query
+    query_vector: list[float] = await asyncio.to_thread(
+        lambda: model.encode(semantic_query, normalize_embeddings=True).tolist()
+    )
+
+    # 2. Do a lightweight kNN search (no filters) to get candidate products
+    try:
+        knn_query = {
+            "size": 20,  # Small number — we just need representative attribute names
+            "_source": ["attributes.name"],  # Only fetch attribute names, nothing else
+            "query": {
+                "knn": {
+                    "embedding_vector": {
+                        "vector": query_vector,
+                        "k": 50
+                    }
+                }
+            }
+        }
+        raw = await asyncio.to_thread(
+            client.search,
+            index=index_name,
+            body=knn_query,
+            request_timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("Failed to fetch candidate attributes: %s", exc)
+        return []
+
+    # 3. Extract unique attribute names from candidate products
+    attr_names: set[str] = set()
+    hits = raw.get("hits", {}).get("hits", [])
+    for hit in hits:
+        source = hit.get("_source", {})
+        for attr in source.get("attributes", []):
+            name = attr.get("name", "")
+            if name:
+                attr_names.add(name)
+
+    logger.debug(
+        "Extracted %d unique attribute names from %d candidate products for query '%s'",
+        len(attr_names), len(hits), semantic_query
+    )
+    return sorted(attr_names)
+
+
+def _find_best_attr_name(extracted: str, actual_names: list[str]) -> str | None:
+    """Resolve an LLM-extracted attribute name to the best match from candidates."""
+    if not actual_names:
+        return None
+
+    # Exact match (case-sensitive)
+    if extracted in actual_names:
+        return extracted
+
+    # Case-insensitive exact match
+    lower_map = {n.lower(): n for n in actual_names}
+    if extracted.lower() in lower_map:
+        return lower_map[extracted.lower()]
+
+    # Fuzzy match — Ratcliff/Obershelp similarity (cutoff=0.6 for precision)
+    matches = difflib.get_close_matches(extracted, actual_names, n=1, cutoff=0.6)
+    if matches:
+        logger.debug("Fuzzy-matched attribute '%s' -> '%s'", extracted, matches[0])
+        return matches[0]
+
+    return None
+
+
+async def _resolve_attribute_filters(
+    client,
+    index_name: str,
+    semantic_query: str,
+    model,
+    required_attributes: Optional[dict[str, str]],
+) -> Optional[dict[str, str]]:
+    """
+    Map LLM-extracted attribute names to actual indexed attribute names.
+
+    Uses candidate-product-based resolution instead of fetching ALL attributes.
+    Called ONCE in nl_search() — NOT repeated in search.py functions.
+    """
+    if not required_attributes:
+        return None
+
+    # Get relevant attribute names from candidate products
+    actual_names = await _get_candidate_attribute_names(
+        client, index_name, semantic_query, model
+    )
+    if not actual_names:
+        return required_attributes  # passthrough if we can't fetch candidates
+
+    resolved: dict[str, str] = {}
+    for extracted_name, value in required_attributes.items():
+        best = _find_best_attr_name(extracted_name, actual_names)
+        if best:
+            resolved[best] = value
+        else:
+            resolved[extracted_name] = value  # keep original as fallback
+
+    if resolved != required_attributes:
+        logger.info("Resolved filters %s -> %s", required_attributes, resolved)
+
+    return resolved
+
+
 async def nl_search(
     client,
     model,
@@ -232,8 +392,9 @@ async def nl_search(
     End-to-end natural language search:
         1. Parse NL query → ParsedNLQuery (via LLM or stub)
         2. Encode semantic_query → vector
-        3. Call hybrid_search() with extracted filters and boost_terms
-        4. Return NLSearchResponse
+        3. Resolve attribute names against candidate products
+        4. Call hybrid_search() with resolved filters and boost_terms
+        5. Return NLSearchResponse
 
     Args:
         client:     OpenSearch client instance
@@ -262,13 +423,24 @@ async def nl_search(
         ).tolist()
     )
 
-    # Step 3: Execute hybrid search
+    # Step 3: Resolve attribute names against candidate products
+    # This maps LLM-extracted names (e.g., "Product Depth") to actual indexed names
+    # (e.g., "Assembled Depth (in.)") by looking at attributes from similar products
+    resolved_attrs = await _resolve_attribute_filters(
+        client=client,
+        index_name=index_name,
+        semantic_query=semantic_q,
+        model=model,
+        required_attributes=parsed.filters.attributes if parsed.filters.attributes else None,
+    )
+
+    # Step 4: Execute hybrid search with resolved attributes
     result = await hybrid_search(
             client=client,
             query=semantic_q,
             query_vector=vector,
             index_name=index_name,
-            required_attributes=parsed.filters.attributes if parsed.filters.attributes else None,
+            required_attributes=resolved_attrs,
             boost_terms=parsed.boost_terms if parsed.boost_terms else None,
             size=size,
         )

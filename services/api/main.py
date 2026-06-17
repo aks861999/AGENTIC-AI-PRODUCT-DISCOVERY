@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from opensearchpy import OpenSearch, RequestsHttpConnection 
+from opensearchpy import OpenSearch, RequestsHttpConnection
 from sentence_transformers import SentenceTransformer
 
 from api.middleware import add_middleware
@@ -25,7 +25,7 @@ from api.models import (
     ChatRequest, ChatResponse, HealthResponse, NLSearchRequest,
     NLSearchResponse, ProductHit, SearchMode, SearchResponse, SuggestResponse,
 )
-from api.nl_query import nl_search
+from api.nl_query import nl_search, _resolve_attribute_filters
 from api.search import hybrid_search, lexical_search, semantic_search
 from api.chatbot import chat_turn
 from api.cart import create_checkout_session, add_line_item, get_session, complete_checkout
@@ -68,11 +68,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up Search API...")
     _os_client = _create_os_client()
     _deps._os_client = _os_client
-    
+
     logger.info("Loading embedding model '%s'...", settings.embedding_model)
     _embedding_model = await asyncio.to_thread(SentenceTransformer, settings.embedding_model)
     _deps._embedding_model = _embedding_model
-    
+
     yield
     logger.info("Shutdown complete.")
 
@@ -99,8 +99,8 @@ async def structured_search(
     client: OpenSearch = Depends(_deps.get_os_client),
     model: SentenceTransformer = Depends(_deps.get_model),
 ) -> SearchResponse:
-    
-    # Parse dynamic JSON filters 
+
+    # Parse dynamic JSON filters
     parsed_attrs = None
     if attributes:
         try:
@@ -122,9 +122,17 @@ async def structured_search(
             )
         else:
             vector = await asyncio.to_thread(lambda: model.encode(q, normalize_embeddings=True).tolist())
+            # Resolve attributes against candidate products for hybrid mode
+            resolved_attrs = await _resolve_attribute_filters(
+                client=client,
+                index_name=settings.index_name,
+                semantic_query=q,
+                model=model,
+                required_attributes=parsed_attrs,
+            ) if parsed_attrs else None
             result = await hybrid_search(
                 client=client, query=q, query_vector=vector,
-                index_name=settings.index_name, required_attributes=parsed_attrs,
+                index_name=settings.index_name, required_attributes=resolved_attrs or parsed_attrs,
                 size=size, from_=from_,
             )
     except Exception as exc:
@@ -155,13 +163,13 @@ async def suggest(prefix: str = Query(..., min_length=1, max_length=100), size: 
 
 @app.post("/index/product", status_code=status.HTTP_201_CREATED, tags=["admin"])
 async def index_product(product: ProductHit, client: OpenSearch = Depends(_deps.get_os_client), model: SentenceTransformer = Depends(_deps.get_model)) -> dict:
-    
+
     # Construct embedding specific to Home Depot schema constraints
     attr_text = " ".join([f"{a.name}: {a.value}" for a in product.attributes])
     embedding_text = " ".join(filter(None, [product.title, product.product_description, attr_text]))
-    
+
     vector = await asyncio.to_thread(lambda: model.encode(embedding_text, normalize_embeddings=True).tolist())
-    
+
     doc = product.model_dump(exclude={"id", "score"})
     doc["embedding_vector"] = vector
     doc["embedding_text"] = embedding_text
@@ -178,7 +186,7 @@ async def chat(request: ChatRequest, client: OpenSearch = Depends(_deps.get_os_c
         result = await chat_turn(session_id=request.session_id or str(uuid.uuid4()), user_message=request.message, client=client, model=model)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    
+
     reply = result.get("reply", "")
     if isinstance(reply, list):
         reply = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in reply)

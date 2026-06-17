@@ -13,10 +13,17 @@ from ingestion.schema import HYBRID_PIPELINE_ID
 
 logger = logging.getLogger(__name__)
 
+
 def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) -> list[dict]:
-    """Dynamically build nested filters for Home Depot attributes."""
+    """
+    Dynamically build nested filters for Home Depot attributes.
+
+    Uses keyword matching on both name and value. The value field
+    has a .keyword subfield for exact matching AND text analysis
+    for more flexible matching (e.g., "8.5 in" vs "8.5 inch").
+    """
     filters: list[dict] = []
-    
+
     if required_attributes:
         for attr_name, attr_value in required_attributes.items():
             filters.append({
@@ -26,7 +33,17 @@ def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) 
                         "bool": {
                             "must": [
                                 {"term": {"attributes.name.keyword": attr_name}},
-                                {"term": {"attributes.value.keyword": attr_value}}
+                                {
+                                    "bool": {
+                                        "should": [
+                                            # Try exact keyword match first
+                                            {"term": {"attributes.value.keyword": attr_value}},
+                                            # Fallback: match on analyzed text (handles "8.5 in" vs "8.5 inch")
+                                            {"match": {"attributes.value": attr_value}},
+                                        ],
+                                        "minimum_should_match": 1
+                                    }
+                                }
                             ]
                         }
                     }
@@ -51,13 +68,13 @@ def _build_lexical_query(query: str, filters: list[dict], boost_terms: Optional[
             }
         }
     ]
-    
+
     if boost_terms:
         for term in boost_terms:
             should_clauses.append({"multi_match": {"query": term, "fields": ["title^2", "product_description", "bullet_points"], "boost": 3}})
-        
-    
-    
+
+
+
     base_query: dict = {
         "bool": {
             "must": [
@@ -113,7 +130,7 @@ def _build_hybrid_query(query: str, query_vector: list[float], filters: list[dic
     if boost_terms:
         for term in boost_terms:
             should_clauses.append({"multi_match": {"query": term, "fields": ["title^2", "product_description", "bullet_points"], "boost": 3}})
-        
+
     bm25_sub: dict = {
         "bool": {
             "must": [
@@ -164,14 +181,14 @@ async def hybrid_search(client: OpenSearch, query: str, query_vector: list[float
     filters = _build_filter_clauses(required_attributes)
     body = _build_hybrid_query(query, query_vector, filters, boost_terms, size, from_)
     params = {"search_pipeline": HYBRID_PIPELINE_ID, "timeout": "15s"}
-    
+
     try:
         raw = await asyncio.to_thread(
             client.search,
             index=index_name,
             body=body,
             params=params,
-            request_timeout=45,  
+            request_timeout=45,
         )
         return _parse_response(raw, SearchMode.hybrid)
     except Exception as exc:
