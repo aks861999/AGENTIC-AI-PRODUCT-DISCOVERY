@@ -14,6 +14,8 @@ from api.nl_query import parse_nl_query
 from api.cart import create_checkout_session, complete_checkout
 from shared.config.settings import get_settings
 import api.dependencies as deps
+from api.nl_query import parse_nl_query, _resolve_attribute_filters
+
 
 import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -114,19 +116,28 @@ async def search_products(query: str) -> str:
         vector = await asyncio.to_thread(
             lambda: model.encode(search_q, normalize_embeddings=True).tolist()
         )
+        raw_attrs = parsed.filters.attributes if parsed.filters.attributes else None
+
+        resolved_attrs = await _resolve_attribute_filters(
+            client=client,
+            index_name=settings.index_name,
+            semantic_query=search_q,
+            model=model,
+            required_attributes=raw_attrs,
+        ) if raw_attrs else None
+
         result = await hybrid_search(
             client=client,
             query=search_q,
             query_vector=vector,
             index_name=settings.index_name,
-            required_attributes=parsed.filters.attributes if parsed.filters.attributes else None,
+            required_attributes=resolved_attrs,
             boost_terms=parsed.boost_terms if parsed.boost_terms else None,
             size=5,
         )
         if not result.hits:
             return json.dumps({"text": "No products found for that query.", "products": []})
 
-        # ✅ FIXED — only fields that exist on ProductHit
         products = []
         text_rows = []
         for i, h in enumerate(result.hits):
