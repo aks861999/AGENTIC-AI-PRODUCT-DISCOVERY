@@ -10,7 +10,6 @@ from typing_extensions import TypedDict
 from opensearchpy import OpenSearch
 from sentence_transformers import SentenceTransformer
 from api.search import hybrid_search
-from api.nl_query import parse_nl_query
 from api.cart import create_checkout_session, complete_checkout
 from shared.config.settings import get_settings
 import api.dependencies as deps
@@ -125,6 +124,9 @@ async def search_products(query: str) -> str:
             model=model,
             required_attributes=raw_attrs,
         ) if raw_attrs else None
+
+        logger.info("DEBUG chatbot: raw_attrs=%s | resolved_attrs=%s", raw_attrs, resolved_attrs)
+
 
         result = await hybrid_search(
             client=client,

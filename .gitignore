@@ -52,3 +52,6 @@ experiment/*.jsonl
 search_shopify/
 
 test.py
+
+start.bat
+stop.bat

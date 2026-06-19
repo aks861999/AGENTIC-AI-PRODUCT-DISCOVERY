@@ -27,6 +27,11 @@ from api.models import NLFilters, NLSearchResponse, ParsedNLQuery, ProductHit, S
 from api.search import hybrid_search
 from shared.config.settings import get_settings
 
+import os
+from pathlib import Path
+
+SCHEMA_CACHE_PATH = Path(__file__).resolve().parent / "schema_cache.npz"
+
 logger = logging.getLogger(__name__)
 
 # ── System prompt ─────────────────────────────────────────────────────────────
@@ -110,11 +115,27 @@ class SchemaLinker:
             await self._refresh_cache(client, index_name, model)
 
     async def _refresh_cache(self, client, index_name: str, model) -> None:
-        """
-        Fetch all distinct attribute.name values via terms aggregation and
-        embed them. This is the correct approach — operates over the schema
-        vocabulary (50-200 names), NOT over product documents.
-        """
+        # ── Fast path: load from disk if available ───────────────────────────
+        if SCHEMA_CACHE_PATH.exists():
+            try:
+                data = np.load(SCHEMA_CACHE_PATH, allow_pickle=True)
+                names = list(data["names"])
+                embeddings = data["embeddings"].astype(np.float32)
+                if names and embeddings.shape[0] == len(names):
+                    self._canonical_names = names
+                    self._canonical_embeddings = embeddings
+                    self._cache_ts = time.monotonic()
+                    logger.info(
+                        "SchemaLinker loaded %d attribute names from disk cache: %s",
+                        len(names), SCHEMA_CACHE_PATH,
+                    )
+                    return
+                else:
+                    logger.warning("SchemaLinker disk cache malformed, falling back to OpenSearch.")
+            except Exception as exc:
+                logger.warning("SchemaLinker disk cache load failed: %s — falling back to OpenSearch.", exc)
+
+        
         try:
             raw = await asyncio.to_thread(
                 client.search,
