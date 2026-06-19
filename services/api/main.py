@@ -25,6 +25,7 @@ from api.models import (
     ChatRequest, ChatResponse, HealthResponse, NLSearchRequest,
     NLSearchResponse, ProductHit, SearchMode, SearchResponse, SuggestResponse,
 )
+from api.nl_query import _schema_linker
 from api.nl_query import nl_search, _resolve_attribute_filters
 from api.search import hybrid_search, lexical_search, semantic_search
 from api.chatbot import chat_turn
@@ -62,6 +63,9 @@ def _create_os_client() -> OpenSearch:
         pool_block=False,
     )
 
+# In lifespan(), after _embedding_model is set:
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _os_client, _embedding_model
@@ -72,6 +76,14 @@ async def lifespan(app: FastAPI):
     logger.info("Loading embedding model '%s'...", settings.embedding_model)
     _embedding_model = await asyncio.to_thread(SentenceTransformer, settings.embedding_model)
     _deps._embedding_model = _embedding_model
+
+    # ── NEW: Warm the schema linker cache at startup ──────────────────────
+    try:
+        await _schema_linker._refresh_cache(_os_client, settings.index_name, _embedding_model)
+        logger.info("Schema linker cache warmed at startup.")
+    except Exception as exc:
+        logger.warning("Schema linker warm-up failed (non-fatal): %s", exc)
+    # ── END NEW ───────────────────────────────────────────────────────────
 
     yield
     logger.info("Shutdown complete.")
