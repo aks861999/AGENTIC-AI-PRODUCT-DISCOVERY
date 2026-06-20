@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=128, alias="BATCH_SIZE")
 
     # ── Ingestion ─────────────────────────────────────────────────
-    home_depot_desc_path: str = Field(..., alias="HOME_DEPOT_DESC_PATH")
-    home_depot_attr_path: str = Field(..., alias="HOME_DEPOT_ATTR_PATH")
+    home_depot_desc_path: str = ""
+    home_depot_attr_path: str = ""
     
     chunk_size: int = Field(default=500, alias="CHUNK_SIZE")
 
