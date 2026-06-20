@@ -100,10 +100,9 @@ class HealthResponse(BaseModel):
 
 class ParsedNLQuery(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    semantic_query: str        = Field(default="")
-    filters:        "NLFilters" = Field(default_factory=lambda: NLFilters())
-    boost_terms:    list[str]  = Field(default_factory=list)
-    search_mode:    SearchMode = Field(default=SearchMode.hybrid)
+    semantic_query: str = Field(default="")
+    filters: NLFilters = Field(default_factory=lambda: NLFilters())
+    search_mode: SearchMode = Field(default=SearchMode.hybrid)
 
 class NLFilters(BaseModel):
     model_config = ConfigDict(from_attributes=True)

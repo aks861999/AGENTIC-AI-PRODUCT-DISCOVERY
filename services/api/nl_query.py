@@ -46,7 +46,6 @@ Output ONLY valid JSON matching this exact schema — no markdown, no explanatio
   "filters": {{
     "attributes": {{"<AttributeName>": "<AttributeValue>"}}
   }},
-  "boost_terms": ["<keyword1>", "<keyword2>"],
   "search_mode": "hybrid"
 }}
 
@@ -60,10 +59,11 @@ CRITICAL RULES FOR ATTRIBUTES:
   Example: "8.5 inch deep clamp" -> you may infer "Assembled Depth (in.)": "8.5 in".
 - Preserve units in the value (e.g., "8.5 in", "600 lb", "12 gauge").
 - Use the EXACT spelling, capitalization, and punctuation from the query for attribute keys.
-
+- - If the user mentions a specific feature like "sound insulation", "soft close",
+  "waterproof", add it to attributes with key "Features"
+  e.g., "Features": "sound insulation". Never omit product features.
 Other rules:
 - semantic_query: strip out attribute/value phrases, keep only the product concept (e.g., "clamps")
-- boost_terms: quality keywords like "galvanized", "heavy-duty", "structural"
 - If no attributes are mentioned, use {{}} for attributes
 - search_mode is always "hybrid"
 """
@@ -381,7 +381,6 @@ def _dict_to_parsed_query(data: dict) -> ParsedNLQuery:
     return ParsedNLQuery(
         semantic_query=data.get("semantic_query", ""),
         filters=filters,
-        boost_terms=data.get("boost_terms") or [],
         search_mode=mode,
     )
 
@@ -513,14 +512,9 @@ def _stub_parse(query: str) -> ParsedNLQuery:
     semantic = re.sub(r'(galvanized|stainless|zinc\s*coated)\s+steel', '', semantic, flags=re.IGNORECASE)
     semantic = re.sub(r'\s+', ' ', semantic).strip()
 
-    # Boost terms: quality descriptors
-    boost_pattern = r'\b(galvanized|heavy-duty|structural|outdoor|corrosion-resistant|zmax|strong-drive)\b'
-    boost_terms = re.findall(boost_pattern, query, re.IGNORECASE)
-
     return ParsedNLQuery(
         semantic_query=semantic or query,
         filters=NLFilters(attributes=attr_filters),
-        boost_terms=boost_terms,
         search_mode=SearchMode.hybrid,
     )
 
@@ -544,11 +538,9 @@ async def parse_nl_query(query: str) -> ParsedNLQuery:
             logger.info("NL chain: response from %s", name)
             parsed_dict = _extract_json(raw_output)
             logger.info(
-                "[DEBUG][parse_nl_query] FINAL ParsedNLQuery => semantic_query=%r | attributes=%s "
-                "| boost_terms=%s | mode=%s",
+                "[DEBUG][parse_nl_query] FINAL ParsedNLQuery => semantic_query=%r | attributes=%s | mode=%s",
                 parsed_dict.get("semantic_query"),
                 parsed_dict.get("filters", {}).get("attributes", {}),
-                parsed_dict.get("boost_terms"),
                 parsed_dict.get("search_mode"),
             )
             return _dict_to_parsed_query(parsed_dict)
@@ -589,8 +581,8 @@ async def nl_search(
 ) -> NLSearchResponse:
     parsed = await parse_nl_query(query)
     logger.info(
-        "NL query parsed: semantic_query=%r filters=%s boost_terms=%s",
-        parsed.semantic_query, parsed.filters, parsed.boost_terms,
+        "NL query parsed: semantic_query=%r filters=%s",
+        parsed.semantic_query, parsed.filters,
     )
     semantic_q = parsed.semantic_query or query
     vector: list[float] = await asyncio.to_thread(
@@ -609,7 +601,6 @@ async def nl_search(
         query_vector=vector,
         index_name=index_name,
         required_attributes=resolved_attrs,
-        boost_terms=parsed.boost_terms if parsed.boost_terms else None,
         size=size,
     )
     return NLSearchResponse(

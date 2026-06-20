@@ -73,11 +73,6 @@ def _build_lexical_query(query: str, filters: list[dict], boost_terms: Optional[
         }
     ]
 
-    if boost_terms:
-        for term in boost_terms:
-            should_clauses.append({"multi_match": {"query": term, "fields": ["title^2", "product_description", "bullet_points"], "boost": 3}})
-
-
 
     base_query: dict = {
         "bool": {
@@ -131,9 +126,7 @@ def _build_hybrid_query(query: str, query_vector: list[float], filters: list[dic
         }
     ]
 
-    if boost_terms:
-        for term in boost_terms:
-            should_clauses.append({"multi_match": {"query": term, "fields": ["title^2", "product_description", "bullet_points"], "boost": 3}})
+
 
     bm25_sub: dict = {
         "bool": {
@@ -169,9 +162,9 @@ def _parse_response(raw: dict, mode: SearchMode) -> SearchResponse:
     hits = [ProductHit.from_hit(h) for h in raw.get("hits", {}).get("hits", [])]
     return SearchResponse(total=total, hits=hits, took_ms=raw.get("took", 0), mode=mode)
 
-async def lexical_search(client: OpenSearch, query: str, index_name: str, required_attributes: Optional[dict[str, str]] = None, boost_terms: Optional[list[str]] = None, size: int = 10, from_: int = 0) -> SearchResponse:
+async def lexical_search(client: OpenSearch, query: str, index_name: str, required_attributes: Optional[dict[str, str]] = None, size: int = 10, from_: int = 0) -> SearchResponse:
     filters = _build_filter_clauses(required_attributes)
-    body = _build_lexical_query(query, filters, boost_terms, size, from_)
+    body = _build_lexical_query(query, filters, size, from_)
     raw = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=30)
     return _parse_response(raw, SearchMode.lexical)
 
@@ -187,7 +180,6 @@ async def hybrid_search(
     query_vector: list[float],
     index_name: str,
     required_attributes: Optional[dict[str, str]] = None,
-    boost_terms: Optional[list[str]] = None,
     size: int = 10,
     from_: int = 0,
 ) -> SearchResponse:
@@ -196,7 +188,7 @@ async def hybrid_search(
 
     while True:
         filters = _build_filter_clauses(attrs_to_try or None)
-        body = _build_hybrid_query(query, query_vector, filters, boost_terms, size, from_)
+        body = _build_hybrid_query(query, query_vector, filters, size, from_)
         params = {"search_pipeline": HYBRID_PIPELINE_ID, "timeout": "15s"}
 
         try:
@@ -206,7 +198,8 @@ async def hybrid_search(
             response = _parse_response(raw, SearchMode.hybrid)
         except Exception as exc:
             logger.warning("Hybrid execution failed (%s); reverting to lexical fallback.", exc)
-            body2 = _build_lexical_query(query, filters, boost_terms, size, from_)
+            body2 = _build_lexical_query(query, filters, size, from_)
+
             raw = await asyncio.to_thread(
                 client.search, index=index_name, body=body2, request_timeout=15,
             )

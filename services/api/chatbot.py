@@ -133,9 +133,10 @@ async def search_products(query: str) -> str:
         parsed = await parse_nl_query(query)
         search_q = parsed.semantic_query or query
 
+
         logger.info(
-            "search_products: query=%r | parsed_semantic=%r | filters=%s | boost=%s",
-            query, search_q, parsed.filters.attributes, parsed.boost_terms,
+            "search_products: query=%r parsed_semantic=%r filters=%s",
+            query, search_q, parsed.filters.attributes,
         )
 
         vector = await asyncio.to_thread(
@@ -160,10 +161,10 @@ async def search_products(query: str) -> str:
             query_vector=vector,
             index_name=settings.index_name,
             required_attributes=resolved_attrs,
-            boost_terms=parsed.boost_terms if parsed.boost_terms else None,
             size=5,
         )
         if not result.hits:
+            logger.info("search_products: 0 hits returned for query=%r resolved_attrs=%s", search_q, resolved_attrs)
             return json.dumps({"text": "No products found for that query.", "products": []})
 
         products = []
@@ -188,6 +189,8 @@ async def search_products(query: str) -> str:
                 f"   {h.product_description[:120]}...\n"
                 f"   Specs: {attrs}"
             )
+
+        logger.info("search_products: %d hits returned for query=%r", len(result.hits), search_q)
 
         return json.dumps({
             "text": "\n".join(text_rows),
