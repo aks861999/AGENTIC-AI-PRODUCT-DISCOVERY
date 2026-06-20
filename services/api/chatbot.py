@@ -37,10 +37,36 @@ _sessions: dict[str, ChatState] = {}
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
 def _get_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(
-        model=settings.llm_model,
-        temperature=0.3,
-        google_api_key=settings.google_api_key,
+    """Return LLM instance. Tries Gemini first, falls back to Groq."""
+    # 1. Gemini (primary)
+    if settings.google_api_key:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            logger.info("Chatbot LLM: using Google Gemini (%s)", settings.llm_model)
+            return ChatGoogleGenerativeAI(
+                model=settings.llm_model,
+                temperature=0.3,
+                google_api_key=settings.google_api_key,
+            )
+        except Exception as exc:
+            logger.warning("Chatbot: Gemini init failed (%s) — trying Groq.", exc)
+
+    # 2. Groq (fallback)
+    if settings.groq_api_key:
+        try:
+            from langchain_openai import ChatOpenAI
+            logger.info("Chatbot LLM: using Groq (%s)", settings.groq_model)
+            return ChatOpenAI(
+                model=settings.groq_model,
+                temperature=0.3,
+                openai_api_key=settings.groq_api_key,
+                openai_api_base="https://api.groq.com/openai/v1",
+            )
+        except Exception as exc:
+            logger.warning("Chatbot: Groq init failed (%s).", exc)
+
+    raise RuntimeError(
+        "No LLM provider available. Set GOOGLE_API_KEY or GROQ_API_KEY in .env"
     )
 
 
@@ -207,6 +233,25 @@ def _active_tools() -> list:
     return _FULL_COMMERCE_TOOLS if settings.agent_mode == "full_commerce" else _SEARCH_ONLY_TOOLS
 
 
+def _build_gemini_llm():
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    return ChatGoogleGenerativeAI(
+        model=settings.llm_model,
+        temperature=0.3,
+        google_api_key=settings.google_api_key,
+        max_retries=settings.max_retries, 
+    )
+
+def _build_groq_llm():
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        model=settings.groq_model,
+        temperature=0.3,
+        openai_api_key=settings.groq_api_key,
+        openai_api_base="https://api.groq.com/openai/v1",
+    )
+
+
 # ── Chat node ─────────────────────────────────────────────────────────────────
 async def chat_node(
     state: ChatState,
@@ -223,15 +268,27 @@ async def chat_node(
         + list(state["messages"])
     )
 
-    response = await asyncio.to_thread(llm.invoke, full_messages)
+    providers = []
+    if settings.google_api_key:
+        providers.append(("gemini", lambda: _build_gemini_llm()))
+    if settings.groq_api_key:
+        providers.append(("groq", lambda: _build_groq_llm()))
 
-    return {
-        **state,
-        "messages": [response],          # add_messages appends automatically
-        "last_results": list(state.get("last_results", [])),
-        "last_query": state.get("last_query"),
-    }
+    await asyncio.sleep(10)
+    response = None
+    for name, llm_factory in providers:
+        try:
+            llm      = llm_factory().bind_tools(tools)
+            response = await asyncio.to_thread(llm.invoke, full_messages)
+            logger.info("chat_node: response from %s", name)
+            break
+        except Exception as exc:
+            logger.warning("chat_node: %s failed (%s) — trying next provider.", name, exc)
 
+    if response is None:
+        raise RuntimeError("All LLM providers failed in chat_node.")
+
+    return {**state, "messages": response}
 
 # ── Routing: go to tools if LLM made a tool call, otherwise end ───────────────
 def _route(state: ChatState) -> Literal["tools", "end"]:

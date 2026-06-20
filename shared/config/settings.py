@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     opensearch_user: Optional[str] = Field(default=None, alias="OPENSEARCH_USER")
     opensearch_password: Optional[str] = Field(default=None, alias="OPENSEARCH_PASSWORD")
 
+    max_retries: int = Field(default=0, alias="MAX_RETRIES")
+
     # ── Index ─────────────────────────────────────────────────────
     index_name: str = Field(default="products", alias="INDEX_NAME")
 
@@ -50,7 +52,13 @@ class Settings(BaseSettings):
     # ── LLM / Google Generative AI ────────────────────────────────
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
     llm_model: str = Field(default="gemini-2.0-flash", alias="LLM_MODEL")
+
+    # Groq (fallback — used when Gemini quota is exhausted or key missing)
+    groq_api_key: Optional[str] = Field(default=None, alias="GROQ_API_KEY")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
+
     llm_temperature: float = Field(default=0.0, alias="LLM_TEMPERATURE")
+
 
     # ── API ───────────────────────────────────────────────────────
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")

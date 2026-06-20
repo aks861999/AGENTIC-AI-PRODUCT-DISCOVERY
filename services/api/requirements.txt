@@ -4,6 +4,8 @@ fastapi==0.136.1
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 
+langchain-openai==1.3.2
+
 # OpenSearch
 opensearch-py==2.8.0
 

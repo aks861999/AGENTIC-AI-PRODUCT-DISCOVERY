@@ -90,7 +90,7 @@ class SchemaLinker:
 
     _CACHE_TTL_SEC = 600   # refresh schema cache every 10 minutes
     _EMBED_THRESHOLD = 0.65  # minimum cosine similarity to accept a candidate
-    _TOP_K = 3               # how many embedding candidates to pass to value verifier
+    _TOP_K = 15               # how many embedding candidates to pass to value verifier
     _AGG_SIZE = 5000
 
     def __init__(self) -> None:
@@ -207,15 +207,7 @@ class SchemaLinker:
     # ── Value verification ────────────────────────────────────────────────────
 
     @staticmethod
-    async def _verify_value(
-        client, index_name: str, attr_name: str, attr_value: str
-    ) -> bool:
-        """
-        Direct OpenSearch query: does attr_name carry attr_value anywhere
-        in the index? Uses a nested bool query with a match (not term) on value
-        so it handles partial strings and analysis (e.g., "Moth Gray" vs "moth gray").
-        One query, deterministic result — not dependent on KNN sampling.
-        """
+    async def _verify_value(client, index_name: str, attr_name: str, attr_value: str) -> bool:
         try:
             resp = await asyncio.to_thread(
                 client.search,
@@ -229,120 +221,93 @@ class SchemaLinker:
                                 "bool": {
                                     "must": [
                                         {"term": {"attributes.name": attr_name}},
-                                        {"match": {"attributes.value": attr_value}},
-                                    ]
+                                    ],
+                                    "should": [
+                                        # Handles exact phrase + word reordering (gray moth = Moth Gray)
+                                        {"match_phrase": {"attributes.value": {
+                                            "query": attr_value,
+                                            "slop": 2
+                                        }}},
+                                        # Handles spelling mistakes (moht grey ≈ Moth Gray)
+                                        {"fuzzy": {"attributes.value.keyword": {
+                                            "value": attr_value,
+                                            "fuzziness": "AUTO",
+                                            "prefix_length": 1
+                                        }}},
+                                    ],
+                                    "minimum_should_match": 1
                                 }
-                            },
+                            }
                         }
-                    },
+                    }
                 },
                 request_timeout=5,
             )
-            count = resp.get("hits", {}).get("total", {}).get("value", 0)
-            logger.debug(
-                "Value verify: attr='%s' value='%s' → %d hits", attr_name, attr_value, count
-            )
+            count = resp["hits"]["total"]["value"]
+            logger.debug("Value verify '%s'='%s': %d hits", attr_name, attr_value, count)
             return count > 0
         except Exception as exc:
             logger.warning("Value verification query failed: %s", exc)
-            return True  # Fail open — don't block the filter if verification errors
+            return True  # fail-open
 
     # ── Public resolve method ─────────────────────────────────────────────────
 
-    async def resolve(
-        self,
-        client,
-        index_name: str,
-        model,
-        extracted_name: str,
-        extracted_value: str,
-    ) -> str:
-        """
-        Resolve an LLM-extracted attribute name to its canonical indexed name.
-
-        Resolution order:
-        1. Exact match against cached canonical names (case-insensitive)
-        2. Embedding cosine similarity → top-K candidates
-        3. Value verification for each candidate → return first confirmed
-        4. Fallback: return best embedding candidate even without value confirmation
-        5. Final fallback: return original extracted name unchanged
-        
-        Args:
-            client:         OpenSearch client
-            index_name:     Index to search against
-            model:          SentenceTransformer model (same instance used for indexing)
-            extracted_name: The attribute name the LLM extracted (e.g., "Color")
-            extracted_value: The attribute value the LLM extracted (e.g., "Moth Gray")
-
-        Returns:
-            The canonical indexed attribute name (e.g., "Color/Finish")
-        """
+    async def resolve(self, client, index_name, model, extracted_name, extracted_value):
         await self._ensure_cache(client, index_name, model)
+        if self._canonical_embeddings is None or not self._canonical_names:
+            return extracted_name
 
-        # ── Stage 1: Exact match (case-insensitive) ──────────────────────────
+        stage1_rejected = set()  # names already proven to NOT carry this value
+
+        # Stage 1: Exact match with value verification
         lower_extracted = extracted_name.lower().strip()
         for canonical in self._canonical_names:
             if canonical.lower() == lower_extracted:
-                logger.debug("SchemaLinker exact match: '%s' → '%s'", extracted_name, canonical)
-                return canonical
+                confirmed = await self._verify_value(client, index_name, canonical, extracted_value)
+                if confirmed:
+                    logger.info("SchemaLinker exact match verified: '%s' → '%s'", extracted_name, canonical)
+                    return canonical
+                else:
+                    logger.info(
+                        "SchemaLinker exact match '%s' found but value '%s' not present "
+                        "— falling through to embedding stage.", canonical, extracted_value,
+                    )
+                    stage1_rejected.add(canonical)  # ← remember this was rejected
+                break
 
-
-        # ── Stage 2: Embedding cosine similarity ─────────────────────────────
-        if self._canonical_embeddings is None or not self._canonical_names:
-            logger.warning("SchemaLinker: no cache available, returning extracted name unchanged.")
-            return extracted_name
-
-        query_vec: np.ndarray = await asyncio.to_thread(
-            lambda: model.encode([extracted_name], normalize_embeddings=True)[0]
+        # Stage 2: Embedding cosine similarity
+        query_vec = np.array(
+            await asyncio.to_thread(lambda: model.encode(extracted_name, normalize_embeddings=True))
         )
-        # Cosine similarity = dot product (embeddings are L2-normalised)
-        scores: np.ndarray = self._canonical_embeddings @ query_vec  # shape: (N,)
-
-        # Get top-K candidates above threshold
-        top_k_indices = scores.argsort()[::-1][: self._TOP_K]
-        candidates: list[tuple[str, float]] = [
+        scores = self._canonical_embeddings @ query_vec
+        top_k_indices = scores.argsort()[-self._TOP_K:][::-1]
+        candidates = [
             (self._canonical_names[i], float(scores[i]))
             for i in top_k_indices
             if float(scores[i]) >= self._EMBED_THRESHOLD
+            and self._canonical_names[i] not in stage1_rejected  # ← skip already-rejected names
         ]
 
         if not candidates:
-            logger.info(
-                "SchemaLinker: no embedding candidate above threshold %.2f for '%s' "
-                "(best score: %.3f for '%s'). Returning extracted name.",
-                self._EMBED_THRESHOLD,
-                extracted_name,
-                float(scores[top_k_indices[0]]) if len(top_k_indices) > 0 else 0.0,
-                self._canonical_names[top_k_indices[0]] if len(top_k_indices) > 0 else "N/A",
-            )
+            logger.info("SchemaLinker no embedding candidate above threshold for '%s'.", extracted_name)
             return extracted_name
 
-        logger.debug(
-            "SchemaLinker embedding candidates for '%s': %s",
-            extracted_name,
-            [(name, f"{score:.3f}") for name, score in candidates],
-        )
-
-        # ── Stage 3: Value verification ───────────────────────────────────────
+        # Stage 3: Value verification
         for candidate_name, embed_score in candidates:
             confirmed = await self._verify_value(client, index_name, candidate_name, extracted_value)
             if confirmed:
                 logger.info(
-                    "SchemaLinker resolved: '%s' → '%s' (embed_score=%.3f, value_verified=True)",
-                    extracted_name,
-                    candidate_name,
-                    embed_score,
+                    "SchemaLinker resolved '%s' → '%s' (score=%.3f, value_verified=True)",
+                    extracted_name, candidate_name, embed_score,
                 )
                 return candidate_name
 
-        # ── Stage 4: No value confirmed — trust best embedding candidate ──────
+        # Stage 4: No value confirmed — use best non-rejected candidate
         best_name, best_score = candidates[0]
         logger.info(
-            "SchemaLinker: value verification failed for all candidates of '%s'. "
-            "Using best embedding match '%s' (score=%.3f) unverified.",
-            extracted_name,
-            best_name,
-            best_score,
+            "SchemaLinker value verification failed for all candidates of '%s'. "
+            "Using best embedding match '%s' score=%.3f (unverified).",
+            extracted_name, best_name, best_score,
         )
         return best_name
 
@@ -421,43 +386,64 @@ def _dict_to_parsed_query(data: dict) -> ParsedNLQuery:
     )
 
 
-# ── LLM chain ─────────────────────────────────────────────────────────────────
-# (keep your existing _build_llm_chain, get_nl_chain, _stub_parse, parse_nl_query unchanged)
-# ...
-
 _attr_name_cache: dict[str, tuple[list[str], float]] = {}
 _ATTR_CACHE_TTL_SEC = 300  # 5 minutes
 
 
+# ── LLM factory — Gemini primary, Groq fallback ──────────────────────────────
+
+def _build_gemini(settings):
+    """Try to build a Gemini LLM. Returns llm or None."""
+    if not settings.google_api_key:
+        return None
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        llm = ChatGoogleGenerativeAI(
+            model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            google_api_key=settings.google_api_key,
+            max_retries=settings.max_retries, 
+        )
+        logger.info("NL chain: using Google Gemini (%s)", settings.llm_model)
+        return llm
+    except Exception as exc:
+        logger.warning("Failed to init Gemini LLM: %s", exc)
+        return None
+
+
+def _build_groq(settings):
+    """Try to build a Groq LLM. Returns llm or None."""
+    if not settings.groq_api_key:
+        return None
+    try:
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=settings.groq_model,
+            temperature=settings.llm_temperature,
+            openai_api_key=settings.groq_api_key,
+            openai_api_base="https://api.groq.com/openai/v1",
+        )
+        logger.info("NL chain: using Groq (%s)", settings.groq_model)
+        return llm
+    except Exception as exc:
+        logger.warning("Failed to init Groq LLM: %s", exc)
+        return None
 
 def _build_llm_chain():
-    """
-    Build and return a LangChain LCEL chain for query parsing.
-
-    Attempts to use Google Gemini if GOOGLE_API_KEY is set,
-    falls back to a lightweight stub chain for offline/test use.
+    """Build and return a LangChain LCEL chain for query parsing.
+    Escalation order: Gemini → Groq → stub (None).
     """
     settings = get_settings()
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", SYSTEM_PROMPT), ("human", USER_PROMPT)]
-    )
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human",  USER_PROMPT),
+    ])
 
-    if settings.google_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
+    llm = _build_gemini(settings) or _build_groq(settings)
+    if llm is not None:
+        return prompt | llm | StrOutputParser()
 
-            llm = ChatGoogleGenerativeAI(
-                model=settings.llm_model,
-                temperature=settings.llm_temperature,
-                google_api_key=settings.google_api_key,
-            )
-            logger.info("NL chain: using Google Gemini (%s)", settings.llm_model)
-            return prompt | llm | StrOutputParser()
-        except Exception as exc:
-            logger.warning("Failed to init Gemini LLM: %s , using stub.", exc)
-
-    # Stub chain: echo-based minimal parser for offline testing
-    logger.info("NL chain: using stub parser (no GOOGLE_API_KEY set).")
+    logger.info("NL chain: using stub parser (no API key configured).")
     return None
 
 
@@ -538,51 +524,39 @@ def _stub_parse(query: str) -> ParsedNLQuery:
         search_mode=SearchMode.hybrid,
     )
 
-
 async def parse_nl_query(query: str) -> ParsedNLQuery:
-    """
-    Parse a natural language query into a structured ParsedNLQuery.
+    settings = get_settings()
+    prompt   = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human",  USER_PROMPT),
+    ])
 
-    Uses LLM if available, otherwise falls back to stub parser.
-    """
-    chain = get_nl_chain()
-    if chain is None:
-        return _stub_parse(query)
+    llm_factories = []
+    if settings.google_api_key:
+        llm_factories.append(("gemini", lambda: _build_gemini(settings)))
+    if settings.groq_api_key:
+        llm_factories.append(("groq",   lambda: _build_groq(settings)))
 
-    try:
-        raw_output: str = await chain.ainvoke({"query": query})
+    for name, factory in llm_factories:
+        try:
+            chain      = prompt | factory() | StrOutputParser()
+            raw_output = str(await chain.ainvoke({"query": query}))
+            logger.info("NL chain: response from %s", name)
+            parsed_dict = _extract_json(raw_output)
+            logger.info(
+                "[DEBUG][parse_nl_query] FINAL ParsedNLQuery => semantic_query=%r | attributes=%s "
+                "| boost_terms=%s | mode=%s",
+                parsed_dict.get("semantic_query"),
+                parsed_dict.get("filters", {}).get("attributes", {}),
+                parsed_dict.get("boost_terms"),
+                parsed_dict.get("search_mode"),
+            )
+            return _dict_to_parsed_query(parsed_dict)
+        except Exception as exc:
+            logger.warning("NL chain %s failed: %s — trying next provider.", name, exc)
 
-
-        logger.debug(
-            "[DEBUG][parse_nl_query] Raw LLM output: %r",
-            raw_output
-        )
-
-
-
-        parsed_dict = _extract_json(raw_output)
-
-        logger.debug(
-            "[DEBUG][parse_nl_query] Extracted JSON dict: %s",
-            parsed_dict
-        )
-
-
-        logger.info(
-            "[DEBUG][parse_nl_query] FINAL ParsedNLQuery => semantic_query=%r | attributes=%s | boost_terms=%s | mode=%s",
-            parsed_dict.get("semantic_query"),
-            parsed_dict.get("filters", {}).get("attributes", {}),
-            parsed_dict.get("boost_terms"),
-            parsed_dict.get("search_mode"),
-        )
-
-
-
-
-        return _dict_to_parsed_query(parsed_dict)
-    except Exception as exc:
-        logger.error("LLM chain failed: %s , falling back to stub parser.", exc)
-        return _stub_parse(query)
+    logger.warning("All LLM providers failed — falling back to stub parser.")
+    return _stub_parse(query)
 
 
 
