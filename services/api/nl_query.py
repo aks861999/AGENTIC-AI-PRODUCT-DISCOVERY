@@ -131,7 +131,7 @@ class SchemaLinker:
 
     _CACHE_TTL_SEC = 600   # refresh schema cache every 10 minutes
     _EMBED_THRESHOLD = 0.65  # minimum cosine similarity to accept a candidate
-    _TOP_K = 15               # how many embedding candidates to pass to value verifier
+    _TOP_K = 5               # how many embedding candidates to pass to value verifier
     _AGG_SIZE = 5000
 
     def __init__(self) -> None:
