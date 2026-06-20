@@ -129,7 +129,6 @@ async def search_products(query: str) -> str:
         return json.dumps({"text": "Search is temporarily unavailable.", "products": []})
 
     try:
-        # Extract filters, boost terms, and semantic core from the NL query
         parsed = await parse_nl_query(query)
         search_q = parsed.semantic_query or query
 

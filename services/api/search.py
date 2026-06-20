@@ -55,7 +55,7 @@ def _build_filter_clauses(required_attributes: Optional[dict[str, str]] = None) 
             })
     return filters
 
-def _build_lexical_query(query: str, filters: list[dict], boost_terms: Optional[list[str]] = None, size: int = 10, from_: int = 0) -> dict:
+def _build_lexical_query(query: str, filters: list[dict], size: int = 10, from_: int = 0) -> dict:
     should_clauses: list[dict] = [
         {
             "nested": {
@@ -110,51 +110,49 @@ def _build_semantic_query(query_vector: list[float], filters: list[dict], k: int
         body["query"]["knn"]["embedding_vector"]["filter"] = {"bool": {"filter": filters}}
     return body
 
-def _build_hybrid_query(query: str, query_vector: list[float], filters: list[dict], boost_terms: Optional[list[str]] = None, size: int = 10, from_: int = 0) -> dict:
-    should_clauses: list[dict] = [
+def _build_hybrid_query(
+    query: str,
+    query_vector: list[float],
+    filters: list[dict],
+    size: int = 10,
+    from_: int = 0,
+) -> dict:
+    should_clauses = [
         {
             "nested": {
                 "path": "attributes",
-                "query": {
-                    "multi_match": {
-                        "query": query,
-                        "fields": ["attributes.name", "attributes.value"]
-                    }
-                },
-                "score_mode": "max"
+                "query": {"multi_match": {"query": query, "fields": ["attributes.name", "attributes.value"]}},
+                "score_mode": "max",
             }
         }
     ]
 
-
-
-    bm25_sub: dict = {
+    bm25_sub = {
         "bool": {
-            "must": [
-                {
-                    "multi_match": {
-                        "query": query,
-                        "fields": ["title^3", "product_description^2"],
-                        "type": "best_fields",
-                        "tie_breaker": 0.3,
-                    }
-                }
-            ],
+            "must": [{"multi_match": {
+                "query": query,
+                "fields": ["title^3", "product_description^2"],
+                "type": "best_fields",
+                "tie_breaker": 0.3,
+            }}],
             "should": should_clauses,
-            "filter": filters,
+            # No filters here — applied via post_filter so scoring is unaffected
         }
     }
 
-    knn_sub: dict = {"knn": {"embedding_vector": {"vector": query_vector, "k": 150}}}
-    if filters:
-        knn_sub["knn"]["embedding_vector"]["filter"] = {"bool": {"filter": filters}}
+    # kNN has NO inner filter — ANN searches full vector space
+    # post_filter below trims results without starving the candidate pool
+    knn_sub = {"knn": {"embedding_vector": {"vector": query_vector, "k": 500}}}
 
-    return {
+    body: dict = {
         "from": from_,
         "size": size,
         "_source": {"excludes": ["embedding_vector"]},
         "query": {"hybrid": {"queries": [bm25_sub, knn_sub]}},
     }
+    if filters:
+        body["post_filter"] = {"bool": {"filter": filters}}
+    return body
 
 def _parse_response(raw: dict, mode: SearchMode) -> SearchResponse:
     total_value = raw.get("hits", {}).get("total", {})
@@ -205,7 +203,7 @@ async def hybrid_search(
             )
             response = _parse_response(raw, SearchMode.lexical)
 
-        if response.total > 0 or not attrs_to_try:
+        if len(response.hits) > 0 or not attrs_to_try:
             if dropped:
                 logger.info("Relaxed filters %s to get results (kept: %s)", dropped, attrs_to_try)
             return response

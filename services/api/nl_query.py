@@ -27,6 +27,8 @@ from api.models import NLFilters, NLSearchResponse, ParsedNLQuery, ProductHit, S
 from api.search import hybrid_search
 from shared.config.settings import get_settings
 
+settings = get_settings()
+
 import os
 from pathlib import Path
 
@@ -69,6 +71,45 @@ Other rules:
 """
 
 USER_PROMPT = "User query: {query}"
+
+
+import re as _re
+
+def _normalize_attr_value(value: str) -> str:
+    """
+    Strip natural-language unit suffixes from numeric attribute values.
+    Generalizes over the full EAV space: "2 doors" → "2", "30 inches" → "30".
+    Non-numeric values (e.g. "Frigidaire", "Frost Free") pass through unchanged.
+    """
+    if not value or not isinstance(value, str):
+        return value
+    val = value.strip()
+    # Only apply to strings that START with a number
+    if not val or not val[0].isdigit():
+        return val
+    # Strip known unit tokens after the numeric part
+    numeric_with_units = _re.compile(
+        r'^(\d+(?:\.\d+)?)'           # leading number (int or float)
+        r'\s*'
+        r'(?:'
+        r'cu\.?\s*ft\.?|cubic\s*feet?' # cubic feet
+        r'|in(?:ch(?:es)?)?\.?'        # inches / in / in.
+        r'|ft\.?|feet?'                # feet
+        r'|lb\.?s?|pounds?'            # pounds
+        r'|gal(?:lons?)?'              # gallons
+        r'|doors?'                     # "2 doors"
+        r'|shelves?|shelfs?'           # "3 shelves"
+        r'|drawers?'                   # "2 drawers"
+        r'|volts?|v\b'                 # voltage
+        r'|watts?|w\b'                 # wattage
+        r'|amps?|a\b'                  # amperage
+        r')?$',
+        _re.IGNORECASE,
+    )
+    m = numeric_with_units.match(val)
+    if m and m.group(1) != val:        # only strip if something was actually stripped
+        return m.group(1)
+    return val
 
 
 
@@ -208,74 +249,85 @@ class SchemaLinker:
 
     @staticmethod
     async def _verify_value(client, index_name: str, attr_name: str, attr_value: str) -> bool:
-        try:
-            resp = await asyncio.to_thread(
-                client.search,
-                index=index_name,
-                body={
-                    "size": 0,
-                    "query": {
-                        "nested": {
-                            "path": "attributes",
-                            "query": {
-                                "bool": {
-                                    "must": [
-                                        {"term": {"attributes.name": attr_name}},
-                                    ],
-                                    "should": [
-                                        # Handles exact phrase + word reordering (gray moth = Moth Gray)
-                                        {"match_phrase": {"attributes.value": {
-                                            "query": attr_value,
-                                            "slop": 2
-                                        }}},
-                                        # Handles spelling mistakes (moht grey ≈ Moth Gray)
-                                        {"fuzzy": {"attributes.value.keyword": {
-                                            "value": attr_value,
-                                            "fuzziness": "AUTO",
-                                            "prefix_length": 1
-                                        }}},
-                                    ],
-                                    "minimum_should_match": 1
+        normalized = _normalize_attr_value(attr_value)
+        values_to_try = list(dict.fromkeys([attr_value, normalized]))  # deduplicated, original first
+
+        for val in values_to_try:
+            try:
+                resp = await asyncio.to_thread(
+                    client.search,
+                    index=index_name,
+                    body={
+                        "size": 0,
+                        "query": {
+                            "nested": {
+                                "path": "attributes",
+                                "query": {
+                                    "bool": {
+                                        "must": [{"term": {"attributes.name": attr_name}}],
+                                        "should": [
+                                            {"match_phrase": {"attributes.value": {"query": val, "slop": 2}}},
+                                            {"fuzzy": {"attributes.value.keyword": {
+                                                "value": val, "fuzziness": "AUTO", "prefix_length": 1
+                                            }}},
+                                        ],
+                                        "minimum_should_match": 1,
+                                    }
                                 }
                             }
                         }
-                    }
-                },
-                request_timeout=5,
-            )
-            count = resp["hits"]["total"]["value"]
-            logger.debug("Value verify '%s'='%s': %d hits", attr_name, attr_value, count)
-            return count > 0
-        except Exception as exc:
-            logger.warning("Value verification query failed: %s", exc)
-            return True  # fail-open
+                    },
+                    request_timeout=5,
+                )
+                if resp["hits"]["total"]["value"] > 0:
+                    return True
+            except Exception as exc:
+                logger.warning("Value verification failed: %s", exc)
+                return True  # fail-open on errors
+
+        return False
 
     # ── Public resolve method ─────────────────────────────────────────────────
 
     async def resolve(self, client, index_name, model, extracted_name, extracted_value):
         await self._ensure_cache(client, index_name, model)
         if self._canonical_embeddings is None or not self._canonical_names:
-            return extracted_name
+            return extracted_name  # fail-open: return original, never guess
 
-        stage1_rejected = set()  # names already proven to NOT carry this value
-
-        # Stage 1: Exact match with value verification
+        stage1_rejected: set[str] = set()
         lower_extracted = extracted_name.lower().strip()
+        normalized_value = _normalize_attr_value(extracted_value)
+
+        # ── Stage 1: Exact match + value verification ─────────────────────────
         for canonical in self._canonical_names:
             if canonical.lower() == lower_extracted:
-                confirmed = await self._verify_value(client, index_name, canonical, extracted_value)
-                if confirmed:
-                    logger.info("SchemaLinker exact match verified: '%s' → '%s'", extracted_name, canonical)
+                if await self._verify_value(client, index_name, canonical, normalized_value):
+                    logger.info("SchemaLinker exact+verified: '%s' → '%s'", extracted_name, canonical)
                     return canonical
-                else:
-                    logger.info(
-                        "SchemaLinker exact match '%s' found but value '%s' not present "
-                        "— falling through to embedding stage.", canonical, extracted_value,
-                    )
-                    stage1_rejected.add(canonical)  # ← remember this was rejected
-                break
+                stage1_rejected.add(canonical)
+                break  # only one exact match possible
 
-        # Stage 2: Embedding cosine similarity
+        # ── Stage 2: Substring containment + value verification ──────────────
+        # "Brand" is contained in "MFG Brand Name" → prioritize over embedding
+        # Guard: only consider substrings ≥ 3 chars to avoid "in", "or" noise
+        if len(lower_extracted) >= 3:
+            substr_candidates = []
+            for canonical in self._canonical_names:
+                if canonical in stage1_rejected:
+                    continue
+                c_lower = canonical.lower()
+                if lower_extracted in c_lower:
+                    # Score: how much of the canonical name is the extracted name
+                    score = len(lower_extracted) / len(c_lower)
+                    substr_candidates.append((canonical, score))
+            substr_candidates.sort(key=lambda x: x[1], reverse=True)
+
+            for candidate_name, _ in substr_candidates:
+                if await self._verify_value(client, index_name, candidate_name, normalized_value):
+                    logger.info("SchemaLinker substring+verified: '%s' → '%s'", extracted_name, candidate_name)
+                    return candidate_name
+
+        # ── Stage 3: Embedding similarity + value verification ───────────────
         query_vec = np.array(
             await asyncio.to_thread(lambda: model.encode(extracted_name, normalize_embeddings=True))
         )
@@ -285,31 +337,22 @@ class SchemaLinker:
             (self._canonical_names[i], float(scores[i]))
             for i in top_k_indices
             if float(scores[i]) >= self._EMBED_THRESHOLD
-            and self._canonical_names[i] not in stage1_rejected  # ← skip already-rejected names
+            and self._canonical_names[i] not in stage1_rejected
         ]
 
-        if not candidates:
-            logger.info("SchemaLinker no embedding candidate above threshold for '%s'.", extracted_name)
-            return extracted_name
-
-        # Stage 3: Value verification
         for candidate_name, embed_score in candidates:
-            confirmed = await self._verify_value(client, index_name, candidate_name, extracted_value)
-            if confirmed:
-                logger.info(
-                    "SchemaLinker resolved '%s' → '%s' (score=%.3f, value_verified=True)",
-                    extracted_name, candidate_name, embed_score,
-                )
+            if await self._verify_value(client, index_name, candidate_name, normalized_value):
+                logger.info("SchemaLinker embed+verified: '%s' → '%s' (%.3f)", extracted_name, candidate_name, embed_score)
                 return candidate_name
 
-        # Stage 4: No value confirmed — use best non-rejected candidate
-        best_name, best_score = candidates[0]
-        logger.info(
-            "SchemaLinker value verification failed for all candidates of '%s'. "
-            "Using best embedding match '%s' score=%.3f (unverified).",
-            extracted_name, best_name, best_score,
+        # ── Stage 4: Fail-open — never return an unverified embedding guess ──
+        # An unverified guess guarantees 0 results. The original name at least
+        # has a chance of matching if the LLM happened to use the right name.
+        logger.warning(
+            "SchemaLinker: no verified match for '%s'. Failing open to original name.",
+            extracted_name,
         )
-        return best_name
+        return extracted_name
 
     async def resolve_all(
         self,
@@ -518,11 +561,30 @@ def _stub_parse(query: str) -> ParsedNLQuery:
         search_mode=SearchMode.hybrid,
     )
 
-async def parse_nl_query(query: str) -> ParsedNLQuery:
+async def parse_nl_query(query: str, client=None, index_name=None, model=None) -> ParsedNLQuery:
     settings = get_settings()
-    prompt   = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human",  USER_PROMPT),
+
+    # ── NEW: Inject top candidate schema names into the prompt ──────────────
+    schema_hint = ""
+    if client and index_name and model and _schema_linker._canonical_names:
+        await _schema_linker._ensure_cache(client, index_name, model)
+        if _schema_linker._canonical_embeddings is not None:
+            q_vec = await asyncio.to_thread(
+                lambda: model.encode(query, normalize_embeddings=True)
+            )
+            scores = _schema_linker._canonical_embeddings @ q_vec
+            top_indices = scores.argsort()[-20:][::-1]
+            top_names = [_schema_linker._canonical_names[i] for i in top_indices]
+            schema_hint = (
+                "\n\nKNOWN ATTRIBUTE NAMES IN THIS CATALOG (use these exact strings):\n"
+                + "\n".join(f"  - {n}" for n in top_names)
+                + "\n\nWhen the user mentions a brand, check this list for the exact brand attribute name."
+                + " When the user mentions width or doors, use the exact name from this list."
+            )
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT + schema_hint),
+        ("human", USER_PROMPT),
     ])
 
     llm_factories = []
@@ -579,7 +641,8 @@ async def nl_search(
     index_name: str,
     size: int = 10,
 ) -> NLSearchResponse:
-    parsed = await parse_nl_query(query)
+    parsed = await parse_nl_query(query,client=client, index_name=settings.index_name, model=model,
+)
     logger.info(
         "NL query parsed: semantic_query=%r filters=%s",
         parsed.semantic_query, parsed.filters,
