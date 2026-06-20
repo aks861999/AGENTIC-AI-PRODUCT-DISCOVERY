@@ -15,7 +15,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, status, Request
+
 from fastapi.middleware.cors import CORSMiddleware
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from sentence_transformers import SentenceTransformer
@@ -32,6 +33,83 @@ from api.chatbot import chat_turn
 from api.cart import create_checkout_session, add_line_item, get_session, complete_checkout
 import api.dependencies as _deps
 from shared.config.settings import get_settings
+
+import asyncio
+from sse_starlette.sse import EventSourceResponse  # pip install sse-starlette
+from collections import deque
+
+# Module-level log queue (holds last 200 lines)
+_log_queue: asyncio.Queue = None
+_log_buffer: deque = deque(maxlen=200)
+
+# Lines to HIDE — AWS endpoints and raw httpx API calls
+_HIDE_PATTERNS = [
+    "amazonaws.com",
+    "httpx HTTP Request",
+    "google_genai.models",
+    "generativelanguage.googleapis.com",
+    "api.groq.com",
+    "AFC is enabled",
+    "sentence_transformers",
+    "opensearch GET",           # cluster health checks
+    "opensearch POST",          # raw OpenSearch calls
+]
+
+class SSELogHandler(logging.Handler):
+    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        super().__init__()
+        self._queue = queue
+        self._loop = loop
+
+    def emit(self, record: logging.LogRecord):
+        msg = self.format(record)
+        # Filter out noise
+        if any(p in msg for p in _HIDE_PATTERNS):
+            return
+        # Only show our app loggers
+        if not any(record.name.startswith(p) for p in ("api.", "shared.")):
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, msg)
+        except Exception:
+            pass
+
+
+# In lifespan(), after _embedding_model is set:
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _log_queue
+    _log_queue = asyncio.Queue(maxsize=500)
+    loop = asyncio.get_event_loop()
+
+    sse_handler = SSELogHandler(_log_queue, loop)
+    sse_handler.setFormatter(logging.Formatter("%(name)s %(message)s"))
+    logging.getLogger().addHandler(sse_handler)
+
+    global _os_client, _embedding_model
+    logger.info("Starting up Search API...")
+    _os_client = _create_os_client()
+    _deps._os_client = _os_client
+
+    logger.info("Loading embedding model '%s'...", settings.embedding_model)
+    _embedding_model = await asyncio.to_thread(SentenceTransformer, settings.embedding_model)
+    _deps._embedding_model = _embedding_model
+
+    try:
+        await _schema_linker._refresh_cache(_os_client, settings.index_name, _embedding_model)
+        logger.info("Schema linker cache warmed at startup.")
+    except Exception as exc:
+        logger.warning("Schema linker warm-up failed (non-fatal): %s", exc)
+
+    yield
+    logger.info("Shutdown complete.")
+
+
+
+
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -63,34 +141,31 @@ def _create_os_client() -> OpenSearch:
         pool_block=False,
     )
 
-# In lifespan(), after _embedding_model is set:
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _os_client, _embedding_model
-    logger.info("Starting up Search API...")
-    _os_client = _create_os_client()
-    _deps._os_client = _os_client
 
-    logger.info("Loading embedding model '%s'...", settings.embedding_model)
-    _embedding_model = await asyncio.to_thread(SentenceTransformer, settings.embedding_model)
-    _deps._embedding_model = _embedding_model
 
-    # ── NEW: Warm the schema linker cache at startup ──────────────────────
-    try:
-        await _schema_linker._refresh_cache(_os_client, settings.index_name, _embedding_model)
-        logger.info("Schema linker cache warmed at startup.")
-    except Exception as exc:
-        logger.warning("Schema linker warm-up failed (non-fatal): %s", exc)
-    # ── END NEW ───────────────────────────────────────────────────────────
 
-    yield
-    logger.info("Shutdown complete.")
 
 app = FastAPI(title="Home Depot Product Search API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 add_middleware(app)
+
+
+@app.get("/logs", tags=["ops"])
+async def log_stream(request: Request):
+    """Server-Sent Events stream of decision-making logs."""
+    async def generate():
+        # Drain any buffered lines first
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                line = await asyncio.wait_for(_log_queue.get(), timeout=15.0)
+                yield {"data": line}
+            except asyncio.TimeoutError:
+                yield {"data": ": keepalive"}  # prevent proxy timeout
+    return EventSourceResponse(generate())
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
 async def health_check(client: OpenSearch = Depends(_deps.get_os_client)) -> HealthResponse:

@@ -453,9 +453,7 @@ async function doSend(){
   appendUserMsg(text);
   csep();
   clog(`► Query: "${text.slice(0,75)}${text.length>75?'…':''}"`, 'info');
-  clog('── LLM: Parsing natural language query ──', 'llm');
-  clog('  Model: gemini-2.5-flash · LangGraph agent', 'dim');
-  clog('  Extracting: semantic_query | attributes | boost_terms', 'dim');
+
 
   const typingRow = appendTyping();
   const t0 = Date.now();
@@ -509,6 +507,8 @@ async function doSend(){
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 }
+
+
 
 // ── Message builders ──────────────────────────────────────────
 function appendUserMsg(text){
@@ -674,6 +674,42 @@ function closeModal(){
   modalOverlay.setAttribute('aria-hidden','true');
   modalOverlay.classList.remove('open');
 }
+
+
+// Real log stream from FastAPI
+function connectLogStream() {
+    const es = new EventSource(`${API_BASE}/logs`);
+
+    es.onmessage = (e) => {
+        const msg = e.data;
+        if (!msg || msg.startsWith(': keepalive')) return;
+
+        // Classify log level for colour coding
+        let type = 'info';
+        if (msg.includes('WARNING') || msg.includes('warn'))   type = 'warn';
+        if (msg.includes('ERROR')   || msg.includes('error'))  type = 'error';
+        if (msg.includes('SchemaLinker'))                       type = 'filter';
+        if (msg.includes('chat_node') || msg.includes('NL chain')) type = 'llm';
+        if (msg.includes('hits returned') || msg.includes('Relaxed')) type = 'result';
+        if (msg.includes('search_products'))                    type = 'step';
+
+        // Strip logger name prefix for cleaner display
+        const clean = msg.replace(/^api\.\w+\s+/, '').replace(/^shared\.\w+\s+/, '');
+        clog(clean, type);
+    };
+
+    es.onerror = () => {
+        clog('Log stream disconnected — retrying…', 'warn');
+        es.close();
+        setTimeout(connectLogStream, 3000);  // auto-reconnect
+    };
+}
+
+connectLogStream();
+checkHealth();
+
+
+
 
 modalClose.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', e=>{ if(e.target===modalOverlay) closeModal(); });
