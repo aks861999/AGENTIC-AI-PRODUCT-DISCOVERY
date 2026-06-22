@@ -219,11 +219,145 @@ input,textarea{font:inherit;color:inherit}
 .quick-chip{font-size:11px;padding:3px 10px;border-radius:var(--radius-full);border:1px solid var(--color-border);color:var(--color-text-muted);background:var(--color-surface-offset);transition:border-color var(--transition),color var(--transition),background var(--transition);white-space:nowrap;cursor:pointer}
 .quick-chip:hover{border-color:var(--color-primary);color:var(--color-primary);background:var(--color-primary-highlight)}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}
+
+
+/* ── MOBILE RESPONSIVENESS ───────────────────────────────────── */
+
+/* Hamburger / console toggle button (mobile only) */
+.console-toggle-btn {
+  display: none;
+  width: 36px; height: 36px;
+  border-radius: var(--radius-md);
+  align-items: center; justify-content: center;
+  color: var(--color-text-muted);
+  transition: background var(--transition), color var(--transition);
+  flex-shrink: 0;
+}
+.console-toggle-btn:hover { background: var(--color-surface-offset); color: var(--color-text); }
+
+/* Console slide-in drawer on mobile */
+@media (max-width: 768px) {
+  body { overflow: hidden; }
+
+  .console-toggle-btn { display: flex; }
+
+  .topbar {
+    padding: 0 var(--space-3);
+    gap: var(--space-2);
+  }
+  .topbar-logo { font-size: var(--text-sm); gap: var(--space-1); }
+  .topbar-logo svg { width: 18px; height: 18px; }
+  .api-badge { display: none; }
+  .topbar-status { gap: var(--space-1); }
+
+  /* Workspace becomes single column */
+  .workspace {
+    grid-template-columns: 1fr;
+    position: relative;
+  }
+
+  /* Console becomes a slide-in drawer from the left */
+  .console-panel {
+    position: fixed;
+    top: 48px; left: 0; bottom: 0;
+    width: min(80vw, 320px);
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    border-right: 1px solid var(--color-console-border);
+    box-shadow: var(--shadow-xl);
+  }
+  .console-panel.open {
+    transform: translateX(0);
+  }
+
+  /* Overlay backdrop when console is open */
+  .console-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    top: 48px;
+    background: oklch(0.1 0.005 80 / 0.5);
+    z-index: 199;
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+  .console-backdrop.visible { display: block; }
+
+  /* Chat panel takes full width */
+  .chat-panel { width: 100%; min-width: 0; }
+
+  /* Chat header adjustments */
+  .chat-header { padding: var(--space-2) var(--space-3); flex-wrap: wrap; gap: var(--space-2); }
+  .chat-header-sub { font-size: 10px; }
+  .chat-hint { display: none; }
+
+  /* Messages area */
+  .chat-messages { padding: var(--space-3); gap: var(--space-3); }
+
+  /* Message bubbles — wider on mobile */
+  .msg-content { max-width: 86%; }
+  .msg-row.bot .msg-content { max-width: 92%; }
+
+  /* Input area */
+  .chat-input-area { padding: var(--space-2) var(--space-3) var(--space-3); }
+  .chat-input { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); }
+
+  /* Quick chips: horizontal scroll on mobile */
+  .quick-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 5px;
+    padding-bottom: 2px;
+  }
+  .quick-chips::-webkit-scrollbar { display: none; }
+  .quick-chip { flex-shrink: 0; }
+
+  /* Product cards in messages */
+  .product-card { padding: var(--space-2) var(--space-3); }
+
+  /* Modal — full screen on mobile */
+  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal-box {
+    max-width: 100%;
+    width: 100%;
+    max-height: 90dvh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border-bottom: none;
+  }
+  .modal-header { padding: var(--space-3) var(--space-4); }
+  .modal-body { padding: var(--space-4); }
+  /* Drag handle visual cue */
+  .modal-box::before {
+    content: '';
+    display: block;
+    width: 36px; height: 4px;
+    background: var(--color-border);
+    border-radius: 2px;
+    margin: var(--space-2) auto 0;
+    flex-shrink: 0;
+  }
+}
+
+/* Tablet: narrow two-column */
+@media (min-width: 769px) and (max-width: 1024px) {
+  .workspace { grid-template-columns: 220px 1fr; }
+  .chat-hint { display: none; }
+  .api-badge { display: none; }
+}
+
 </style>
 </head>
 <body>
 
 <header class="topbar">
+  <button class="console-toggle-btn" id="consoleToggleBtn" aria-label="Toggle console" title="Toggle system console">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+    </svg>
+  </button>
   <div class="topbar-logo">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-label="KI Search">
       <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M11 8v6M8 11h6" stroke-linecap="round"/>
@@ -725,6 +859,37 @@ modalBox.addEventListener('keydown', e=>{
 });
 
 chatInput.focus();
+
+// ── Mobile Console Toggle ─────────────────────────────────────
+(function(){
+  const toggleBtn = document.getElementById('consoleToggleBtn');
+  const consolePanelEl = document.querySelector('.console-panel');
+  const backdrop = document.getElementById('consoleBackdrop');
+  if(!toggleBtn || !consolePanelEl) return;
+
+  function openConsole(){
+    consolePanelEl.classList.add('open');
+    backdrop.classList.add('visible');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeConsole(){
+    consolePanelEl.classList.remove('open');
+    backdrop.classList.remove('visible');
+    document.body.style.overflow = '';
+  }
+  toggleBtn.addEventListener('click', ()=>{
+    consolePanelEl.classList.contains('open') ? closeConsole() : openConsole();
+  });
+  backdrop.addEventListener('click', closeConsole);
+
+  // Close console on window resize to desktop
+  window.addEventListener('resize', ()=>{
+    if(window.innerWidth > 768) closeConsole();
+  });
+})();
+
 </script>
+
+<div class="console-backdrop" id="consoleBackdrop"></div>
 </body>
 </html>
