@@ -152,20 +152,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 add_middleware(app)
 
 
-@app.get("/logs", tags=["ops"])
-async def log_stream(request: Request):
-    """Server-Sent Events stream of decision-making logs."""
-    async def generate():
-        # Drain any buffered lines first
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                line = await asyncio.wait_for(_log_queue.get(), timeout=15.0)
-                yield {"data": line}
-            except asyncio.TimeoutError:
-                yield {"data": ": keepalive"}  # prevent proxy timeout
-    return EventSourceResponse(generate())
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
 async def health_check(client: OpenSearch = Depends(_deps.get_os_client)) -> HealthResponse:

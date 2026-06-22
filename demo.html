@@ -103,32 +103,9 @@ input,textarea{font:inherit;color:inherit}
 .api-badge{font-family:var(--font-mono);font-size:11px;color:var(--color-text-faint);background:var(--color-surface-offset);padding:2px 8px;border-radius:var(--radius-full);border:1px solid var(--color-border)}
 
 /* Workspace */
-.workspace{flex:1;display:grid;grid-template-columns:25% 1fr;min-height:0;overflow:hidden}
+.workspace{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
-/* Console */
-.console-panel{background:var(--color-console-bg);border-right:1px solid var(--color-console-border);display:flex;flex-direction:column;overflow:hidden;font-family:var(--font-mono)}
-.console-header{padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--color-console-border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-.console-title{display:flex;align-items:center;gap:var(--space-2);font-size:11px;font-weight:500;color:var(--color-console-muted);text-transform:uppercase;letter-spacing:.08em}
-.console-title-dot{width:7px;height:7px;border-radius:50%;background:var(--color-console-text);opacity:.5;animation:pulse 2.4s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.3}50%{opacity:.85}}
-.console-clear-btn{font-size:10px;color:var(--color-console-muted);padding:2px 7px;border-radius:var(--radius-sm);transition:color var(--transition),background var(--transition);font-family:var(--font-mono);letter-spacing:.04em}
-.console-clear-btn:hover{color:var(--color-console-text);background:oklch(1 0 0 / 0.04)}
-.console-body{flex:1;overflow-y:auto;padding:var(--space-2) 0;scroll-behavior:smooth}
-.console-body::-webkit-scrollbar{width:3px}
-.console-body::-webkit-scrollbar-thumb{background:var(--color-console-border);border-radius:2px}
-.console-line{display:flex;gap:8px;padding:1.5px var(--space-3);opacity:0;animation:fadeIn .18s ease forwards}
-@keyframes fadeIn{to{opacity:1}}
-.console-line:hover{background:oklch(1 0 0 / 0.025)}
-.console-ts{color:var(--color-console-muted);flex-shrink:0;user-select:none;font-size:10px;padding-top:1px;line-height:1.7}
-.console-msg{color:var(--color-console-text);word-break:break-all;font-size:11px;line-height:1.65}
-.log-info  .console-msg{color:var(--color-console-info)}
-.log-warn  .console-msg{color:var(--color-console-warn)}
-.log-error .console-msg{color:var(--color-console-error)}
-.log-result .console-msg{color:#96e07c}
-.log-llm   .console-msg{color:#c8a8f8}
-.log-filter .console-msg{color:#f4c85a}
-.log-dim   .console-msg{color:var(--color-console-muted);opacity:.7}
-.console-separator{height:1px;background:var(--color-console-border);margin:var(--space-2) var(--space-3);opacity:.4}
+/* Console panel removed — logs shown inline */
 
 /* Chat Panel */
 .chat-panel{display:flex;flex-direction:column;overflow:hidden;background:var(--color-bg)}
@@ -171,7 +148,7 @@ input,textarea{font:inherit;color:inherit}
 .product-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-2)}
 .product-title{font-size:var(--text-sm);font-weight:600;color:var(--color-text);line-height:1.35;flex:1}
 .product-id-badge{font-family:var(--font-mono);font-size:10px;color:var(--color-text-faint);background:var(--color-surface-offset);padding:2px 6px;border-radius:var(--radius-sm);flex-shrink:0;border:1px solid var(--color-border)}
-.product-desc{font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.product-desc{font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .product-attrs{display:flex;flex-wrap:wrap;gap:4px}
 .attr-chip{font-size:11px;padding:2px 8px;border-radius:var(--radius-full);background:var(--color-primary-highlight);color:var(--color-primary);border:1px solid oklch(from var(--color-primary) l c h / 0.2);font-weight:500;white-space:nowrap}
 .product-card-footer{display:flex;align-items:center;justify-content:flex-end;font-size:var(--text-xs);color:var(--color-text-faint);gap:4px}
@@ -223,66 +200,7 @@ input,textarea{font:inherit;color:inherit}
 
 /* ── MOBILE RESPONSIVENESS ───────────────────────────────────── */
 
-/* Hamburger / console toggle button (mobile only) */
-.console-toggle-btn {
-  display: none;
-  width: 36px; height: 36px;
-  border-radius: var(--radius-md);
-  align-items: center; justify-content: center;
-  color: var(--color-text-muted);
-  transition: background var(--transition), color var(--transition);
-  flex-shrink: 0;
-}
-.console-toggle-btn:hover { background: var(--color-surface-offset); color: var(--color-text); }
-
-/* Console slide-in drawer on mobile */
 @media (max-width: 768px) {
-  body { overflow: hidden; }
-
-  .console-toggle-btn { display: flex; }
-
-  .topbar {
-    padding: 0 var(--space-3);
-    gap: var(--space-2);
-  }
-  .topbar-logo { font-size: var(--text-sm); gap: var(--space-1); }
-  .topbar-logo svg { width: 18px; height: 18px; }
-  .api-badge { display: none; }
-  .topbar-status { gap: var(--space-1); }
-
-  /* Workspace becomes single column */
-  .workspace {
-    grid-template-columns: 1fr;
-    position: relative;
-  }
-
-  /* Console becomes a slide-in drawer from the left */
-  .console-panel {
-    position: fixed;
-    top: 48px; left: 0; bottom: 0;
-    width: min(80vw, 320px);
-    z-index: 200;
-    transform: translateX(-100%);
-    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-    border-right: 1px solid var(--color-console-border);
-    box-shadow: var(--shadow-xl);
-  }
-  .console-panel.open {
-    transform: translateX(0);
-  }
-
-  /* Overlay backdrop when console is open */
-  .console-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    top: 48px;
-    background: oklch(0.1 0.005 80 / 0.5);
-    z-index: 199;
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
-  }
-  .console-backdrop.visible { display: block; }
 
   /* Chat panel takes full width */
   .chat-panel { width: 100%; min-width: 0; }
@@ -343,21 +261,89 @@ input,textarea{font:inherit;color:inherit}
 
 /* Tablet: narrow two-column */
 @media (min-width: 769px) and (max-width: 1024px) {
-  .workspace { grid-template-columns: 220px 1fr; }
   .chat-hint { display: none; }
   .api-badge { display: none; }
 }
+
+/* ── Thinking / Reasoning Block ───────────────────────────────── */
+.thinking-block {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-offset);
+  overflow: hidden;
+  margin-bottom: var(--space-2);
+}
+.thinking-header {
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+.thinking-header::-webkit-details-marker { display: none; }
+.thinking-header:hover { color: var(--color-text); background: var(--color-surface-dynamic); }
+.thinking-header .th-icon { font-size: 13px; }
+.thinking-header .th-label { flex: 1; }
+.thinking-header .th-chevron {
+  margin-left: auto;
+  color: var(--color-text-faint);
+  transition: transform 0.28s ease;
+  font-size: 11px;
+}
+details[open] > .thinking-header .th-chevron { transform: rotate(90deg); }
+details[open] > .thinking-header { color: var(--color-text); border-bottom: 1px solid var(--color-border); }
+
+.thinking-content {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.35s ease, opacity 0.28s ease;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.65;
+}
+details[open] .thinking-content {
+  max-height: 420px;
+  overflow-y: auto;
+  opacity: 1;
+}
+.thinking-content::-webkit-scrollbar { width: 3px; }
+.thinking-content::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
+.thinking-line {
+  display: flex;
+  gap: 8px;
+  padding: 2px 14px;
+  border-bottom: none;
+}
+.thinking-line:first-child { padding-top: 10px; }
+.thinking-line:last-child  { padding-bottom: 10px; }
+.th-ts { color: var(--color-text-faint); flex-shrink: 0; font-size: 10px; padding-top: 1px; }
+.th-msg { color: var(--color-console-text); word-break: break-word; }
+.th-msg.type-info  { color: var(--color-console-info); }
+.th-msg.type-warn  { color: var(--color-console-warn); }
+.th-msg.type-error { color: var(--color-console-error); }
+.th-msg.type-result{ color: #96e07c; }
+.th-msg.type-llm   { color: #c8a8f8; }
+.th-msg.type-filter{ color: #f4c85a; }
+.th-msg.type-dim   { color: var(--color-text-faint); opacity: 0.7; }
+.th-msg.type-step  { color: var(--color-console-text); }
+
+/* Spinning brain icon while thinking */
+.thinking-spinning .th-icon { display: inline-block; animation: th-spin 1.2s linear infinite; }
+@keyframes th-spin { to { transform: rotate(360deg); } }
 
 </style>
 </head>
 <body>
 
 <header class="topbar">
-  <button class="console-toggle-btn" id="consoleToggleBtn" aria-label="Toggle console" title="Toggle system console">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
-    </svg>
-  </button>
   <div class="topbar-logo">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-label="KI Search">
       <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M11 8v6M8 11h6" stroke-linecap="round"/>
@@ -384,19 +370,7 @@ input,textarea{font:inherit;color:inherit}
 </header>
 
 <main class="workspace">
-
-  <aside class="console-panel" aria-label="System console">
-    <div class="console-header">
-      <div class="console-title">
-        <span class="console-title-dot"></span>
-        System Console
-      </div>
-      <button class="console-clear-btn" id="consoleClearBtn">CLR</button>
-    </div>
-    <div class="console-body" id="consoleBody" role="log" aria-live="polite"></div>
-  </aside>
-
-  <section class="chat-panel" aria-label="Chat">
+<section class="chat-panel" aria-label="Chat">
     <div class="chat-header">
       <div class="chat-header-info">
         <div class="chat-header-title">Home Improvement Assistant</div>
@@ -450,6 +424,66 @@ input,textarea{font:inherit;color:inherit}
 </div>
 
 <script>
+
+// ── Per-query Thinking Block ──────────────────────────────────
+let _thinkingLogs = [];   // buffer for current query
+let _thinkingBlock = null; // current <details> DOM node
+let _thinkingContent = null;
+let _thinkingHeader  = null;
+let _thinkingStart   = 0;
+
+function pad2(n){ return String(n).padStart(2,'0'); }
+function ts(){const d=new Date();return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;}
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function startThinkingBlock(parentEl) {
+  _thinkingLogs = [];
+  _thinkingStart = Date.now();
+
+  const details = document.createElement('details');
+  details.className = 'thinking-block thinking-spinning';
+  details.setAttribute('open', '');
+
+  details.innerHTML = `
+    <summary class="thinking-header">
+      <span class="th-icon">⟳</span>
+      <span class="th-label">Thinking…</span>
+      <span class="th-chevron">▸</span>
+    </summary>
+    <div class="thinking-content"></div>`;
+
+  _thinkingBlock   = details;
+  _thinkingHeader  = details.querySelector('.thinking-header');
+  _thinkingContent = details.querySelector('.thinking-content');
+  parentEl.appendChild(details);
+  return details;
+}
+
+function addThinkingLine(msg, type) {
+  if (!_thinkingContent) return;
+  _thinkingLogs.push({ msg, type });
+  const line = document.createElement('div');
+  line.className = 'thinking-line';
+  line.innerHTML = `<span class="th-ts">${ts()}</span><span class="th-msg type-${type}">${escHtml(msg)}</span>`;
+  _thinkingContent.appendChild(line);
+  _thinkingContent.scrollTop = _thinkingContent.scrollHeight;
+}
+
+function finaliseThinkingBlock(hitCount) {
+  if (!_thinkingBlock) return;
+  const elapsed = ((Date.now() - _thinkingStart) / 1000).toFixed(1);
+  _thinkingBlock.classList.remove('thinking-spinning');
+  _thinkingHeader.querySelector('.th-icon').textContent = '🧠';
+  _thinkingHeader.querySelector('.th-label').textContent =
+    `Thought for ${elapsed}s · ${hitCount} product${hitCount !== 1 ? 's' : ''} found`;
+  // Auto-collapse after answer is rendered
+  setTimeout(() => { _thinkingBlock.removeAttribute('open'); }, 600);
+  _thinkingBlock   = null;
+  _thinkingContent = null;
+  _thinkingHeader  = null;
+}
+
+
 const API_BASE   = '';
 const SESSION_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
 let isLoading    = false;
@@ -470,28 +504,11 @@ let isLoading    = false;
 })();
 
 // ── Console ───────────────────────────────────────────────────
-const consoleBody = document.getElementById('consoleBody');
-function pad2(n){ return String(n).padStart(2,'0'); }
-function ts(){const d=new Date();return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;}
-function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-function clog(msg, type='step'){
-  const line = document.createElement('div');
-  line.className = `console-line log-${type}`;
-  line.innerHTML = `<span class="console-ts">${ts()}</span><span class="console-msg">${escHtml(msg)}</span>`;
-  consoleBody.appendChild(line);
-  consoleBody.scrollTop = consoleBody.scrollHeight;
-}
-function csep(){
-  const el = document.createElement('div');
-  el.className = 'console-separator';
-  consoleBody.appendChild(el);
-}
+function clog(msg, type='step'){ /* logs now shown inline as thinking blocks */ }
+function csep(){ /* no-op */ }
 
-document.getElementById('consoleClearBtn').addEventListener('click', ()=>{
-  consoleBody.innerHTML = '';
-  clog('Console cleared.', 'dim');
-});
+
 
 // ── Health Check ──────────────────────────────────────────────
 const statusDot  = document.getElementById('statusDot');
@@ -568,8 +585,6 @@ document.querySelectorAll('.quick-chip').forEach(btn=>{
 document.getElementById('clearChatBtn').addEventListener('click', ()=>{
   messagesEl.innerHTML = '';
   appendWelcome();
-  csep();
-  clog('Chat cleared.', 'dim');
 });
 
 // ── Send ──────────────────────────────────────────────────────
@@ -585,14 +600,18 @@ async function doSend(){
   sendBtn.disabled   = true;
 
   appendUserMsg(text);
-  csep();
-  clog(`► Query: "${text.slice(0,75)}${text.length>75?'…':''}"`, 'info');
 
-
+  // Create typing row + attach thinking block to it
   const typingRow = appendTyping();
+  const thinkingContainer = typingRow.querySelector('.msg-content');
+  startThinkingBlock(thinkingContainer);
+
+  addThinkingLine(`► Query: "${text.slice(0,75)}${text.length>75?'…':''}"`, 'info');
+
   const t0 = Date.now();
 
   try{
+    addThinkingLine(`POST ${API_BASE}/chat`, 'step');
     const res = await fetch(`${API_BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -600,37 +619,39 @@ async function doSend(){
     });
 
     const elapsed = Date.now() - t0;
-    clog(`── OpenSearch hybrid pipeline ──`, 'step');
-    clog(`  search_pipeline: hybrid-search-pipeline`, 'dim');
-    clog(`  KNN weight: 0.6  BM25 weight: 0.4  k=150`, 'dim');
-    clog(`  Embedding: BAAI/bge-small-en-v1.5 (dim=384)`, 'dim');
-    clog(`← HTTP ${res.status}  ${elapsed}ms`, res.ok ? 'result' : 'error');
+    addThinkingLine('── OpenSearch hybrid pipeline ──', 'step');
+    addThinkingLine('  search_pipeline: hybrid-search-pipeline', 'dim');
+    addThinkingLine('  KNN weight: 0.6  BM25 weight: 0.4  k=150', 'dim');
+    addThinkingLine('  Embedding: BAAI/bge-small-en-v1.5 (dim=384)', 'dim');
+    addThinkingLine(`← HTTP ${res.status}  ${elapsed}ms`, res.ok ? 'result' : 'error');
 
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
     const hits = data.results ? data.results.length : 0;
     if(hits > 0){
-      clog(`── ${hits} product(s) returned ──`, 'result');
+      addThinkingLine(`── ${hits} product(s) returned ──`, 'result');
       data.results.slice(0,5).forEach((p,i)=>{
         const uid = p.productuid || p.id || '?';
         const t   = (p.title||'').slice(0,42);
-        clog(`  [${i+1}] #${uid}  ${t}`, 'result');
+        addThinkingLine(`  [${i+1}] #${uid}  ${t}`, 'result');
         const topAttr = (p.attributes||[]).slice(0,2).map(a=>`${a.name}: ${a.value}`).join(' | ');
-        if(topAttr) clog(`       ${topAttr}`, 'dim');
+        if(topAttr) addThinkingLine(`       ${topAttr}`, 'dim');
       });
     } else {
-      clog('  0 hits, filters may have been relaxed or dropped.', 'warn');
-      clog('  See attribute resolution bug: "Color" ≠ "Color/Finish"', 'warn');
+      addThinkingLine('  0 hits — filters may have been relaxed.', 'warn');
     }
 
+    // Finalise thinking block, remove typing indicator, render answer
+    finaliseThinkingBlock(hits);
     typingRow.remove();
     appendBotMessage(data.reply || 'No response.', data.results || []);
 
   } catch(err){
     const elapsed = Date.now() - t0;
-    clog(`✗ Error after ${elapsed}ms: ${err.message}`, 'error');
-    clog('  Is uvicorn running? Check terminal.', 'warn');
+    addThinkingLine(`✗ Error after ${elapsed}ms: ${err.message}`, 'error');
+    addThinkingLine('  Is uvicorn running? Check terminal.', 'warn');
+    finaliseThinkingBlock(0);
     typingRow.remove();
     appendUserMsg2bot('Could not reach the API. Make sure the server is running on port 8000.');
   } finally{
@@ -641,8 +662,6 @@ async function doSend(){
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 }
-
-
 
 // ── Message builders ──────────────────────────────────────────
 function appendUserMsg(text){
@@ -810,36 +829,7 @@ function closeModal(){
 }
 
 
-// Real log stream from FastAPI
-function connectLogStream() {
-    const es = new EventSource(`${API_BASE}/logs`);
-
-    es.onmessage = (e) => {
-        const msg = e.data;
-        if (!msg || msg.startsWith(': keepalive')) return;
-
-        // Classify log level for colour coding
-        let type = 'info';
-        if (msg.includes('WARNING') || msg.includes('warn'))   type = 'warn';
-        if (msg.includes('ERROR')   || msg.includes('error'))  type = 'error';
-        if (msg.includes('SchemaLinker'))                       type = 'filter';
-        if (msg.includes('chat_node') || msg.includes('NL chain')) type = 'llm';
-        if (msg.includes('hits returned') || msg.includes('Relaxed')) type = 'result';
-        if (msg.includes('search_products'))                    type = 'step';
-
-        // Strip logger name prefix for cleaner display
-        const clean = msg.replace(/^api\.\w+\s+/, '').replace(/^shared\.\w+\s+/, '');
-        clog(clean, type);
-    };
-
-    es.onerror = () => {
-        clog('Log stream disconnected, retrying…', 'warn');
-        es.close();
-        setTimeout(connectLogStream, 3000);  // auto-reconnect
-    };
-}
-
-connectLogStream();
+// Log stream removed: per-query thinking blocks replace global SSE stream
 checkHealth();
 
 
@@ -860,36 +850,9 @@ modalBox.addEventListener('keydown', e=>{
 
 chatInput.focus();
 
-// ── Mobile Console Toggle ─────────────────────────────────────
-(function(){
-  const toggleBtn = document.getElementById('consoleToggleBtn');
-  const consolePanelEl = document.querySelector('.console-panel');
-  const backdrop = document.getElementById('consoleBackdrop');
-  if(!toggleBtn || !consolePanelEl) return;
 
-  function openConsole(){
-    consolePanelEl.classList.add('open');
-    backdrop.classList.add('visible');
-    document.body.style.overflow = 'hidden';
-  }
-  function closeConsole(){
-    consolePanelEl.classList.remove('open');
-    backdrop.classList.remove('visible');
-    document.body.style.overflow = '';
-  }
-  toggleBtn.addEventListener('click', ()=>{
-    consolePanelEl.classList.contains('open') ? closeConsole() : openConsole();
-  });
-  backdrop.addEventListener('click', closeConsole);
-
-  // Close console on window resize to desktop
-  window.addEventListener('resize', ()=>{
-    if(window.innerWidth > 768) closeConsole();
-  });
-})();
 
 </script>
 
-<div class="console-backdrop" id="consoleBackdrop"></div>
 </body>
 </html>
