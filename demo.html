@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KI Product Search — Live Demo</title>
+<title>KI Product Search, Live Demo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Inter:wght@300..700&display=swap" rel="stylesheet">
@@ -233,7 +233,7 @@ input,textarea{font:inherit;color:inherit}
   <div class="topbar-status">
     <span class="status-dot" id="statusDot"></span>
     <span id="statusText">Checking API…</span>
-    <span class="api-badge" id="apiUrlBadge">localhost:8000</span>
+    <span class="api-badge" id="apiUrlBadge">Deployed on EC2</span>
   </div>
   <div class="topbar-actions">
     <button class="icon-btn" data-theme-toggle aria-label="Toggle theme" title="Toggle dark/light mode">
@@ -370,7 +370,7 @@ async function checkHealth(){
     if(r.ok){
       statusDot.className   = 'status-dot connected';
       statusText.textContent = 'API online';
-      clog('✓ API is online — ready to search', 'result');
+      clog('✓ API is online, ready to search', 'result');
       const data = await r.json().catch(()=>({}));
       if(data.version) clog(`  version: ${data.version}  opensearch: ${data.opensearch}`, 'dim');
     } else {
@@ -396,7 +396,7 @@ function appendWelcome(){
     <div class="msg-content">
       <div class="msg-bubble">
         Hi! I'm your home improvement product assistant powered by <strong>hybrid semantic + BM25 search</strong> on AWS OpenSearch.<br><br>
-        Try a natural language query — e.g. <em>"Find me paint with color/finish Moth Gray"</em> — or tap a quick chip below.
+        Try a natural language query, e.g. <em>"Find me paint with color/finish Moth Gray"</em>, or tap a quick chip below.
         <br><br><span style="color:var(--color-text-faint);font-size:var(--text-xs)">Session: ${escHtml(SESSION_ID)}</span>
       </div>
     </div>`;
@@ -486,7 +486,7 @@ async function doSend(){
         if(topAttr) clog(`       ${topAttr}`, 'dim');
       });
     } else {
-      clog('  0 hits — filters may have been relaxed or dropped.', 'warn');
+      clog('  0 hits, filters may have been relaxed or dropped.', 'warn');
       clog('  See attribute resolution bug: "Color" ≠ "Color/Finish"', 'warn');
     }
 
@@ -544,7 +544,7 @@ function appendBotMessage(replyText, results){
     const cards = results.slice(0,6).map((p,i)=>buildCard(p,i)).join('');
     cardsHtml = `
       <div class="results-grid" role="list">
-        <div class="results-label">${results.length} product${results.length!==1?'s':''} found — click any card for full specs</div>
+        <div class="results-label">${results.length} product${results.length!==1?'s':''} found, click any card for full specs</div>
         ${cards}
       </div>`;
   }
@@ -653,7 +653,7 @@ function openModal(p){
       `<tr><td>${escHtml(a.name)}</td><td>${escHtml(a.value)}</td></tr>`
     ).join('');
     html += `<div>
-      <div class="modal-section-label">Full Specifications — ${attrs.length} attributes</div>
+      <div class="modal-section-label">Full Specifications, ${attrs.length} attributes</div>
       <table class="attr-table" aria-label="All product specifications">
         <tbody>${rows}</tbody>
       </table>
@@ -667,7 +667,7 @@ function openModal(p){
   modalOverlay.classList.add('open');
   modalClose.focus();
 
-  clog(`Modal: #${uid} opened — ${attrs.length} specs loaded`, 'info');
+  clog(`Modal: #${uid} opened, ${attrs.length} specs loaded`, 'info');
 }
 
 function closeModal(){
@@ -699,7 +699,7 @@ function connectLogStream() {
     };
 
     es.onerror = () => {
-        clog('Log stream disconnected — retrying…', 'warn');
+        clog('Log stream disconnected, retrying…', 'warn');
         es.close();
         setTimeout(connectLogStream, 3000);  // auto-reconnect
     };
