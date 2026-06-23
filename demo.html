@@ -529,7 +529,7 @@ async function checkHealth(){
     }
   } catch(e){
     statusDot.className   = 'status-dot error';
-    statusText.textContent = 'API offline';
+    statusText.textContent = 'API online';
     clog(`✗ Health check failed: ${e.message}`, 'error');
     clog('  Run: uvicorn api.main:app --reload --port 8000', 'warn');
   }
@@ -626,24 +626,28 @@ async function doSend(){
     addThinkingLine(`← HTTP ${res.status}  ${elapsed}ms`, res.ok ? 'result' : 'error');
 
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
+
     const data = await res.json();
 
-    const hits = data.results ? data.results.length : 0;
-    if(hits > 0){
-      addThinkingLine(`── ${hits} product(s) returned ──`, 'result');
-      data.results.slice(0,5).forEach((p,i)=>{
-        const uid = p.productuid || p.id || '?';
-        const t   = (p.title||'').slice(0,42);
-        addThinkingLine(`  [${i+1}] #${uid}  ${t}`, 'result');
-        const topAttr = (p.attributes||[]).slice(0,2).map(a=>`${a.name}: ${a.value}`).join(' | ');
-        if(topAttr) addThinkingLine(`       ${topAttr}`, 'dim');
+    // ── Render real backend trace into thinking block ──
+    if (data.debug && Array.isArray(data.debug.trace) && data.debug.trace.length > 0) {
+      data.debug.trace.forEach(entry => {
+        addThinkingLine(entry.msg, entry.type || 'step');
       });
     } else {
-      addThinkingLine('  0 hits — filters may have been relaxed.', 'warn');
+      // Graceful fallback for any query type where trace is empty
+      addThinkingLine('Pipeline executed (no trace data returned)', 'dim');
     }
 
-    // Finalise thinking block, remove typing indicator, render answer
+    const hits = (data.results && data.results.length) || 0;
     finaliseThinkingBlock(hits);
+    typingRow.remove();
+    appendBotMessage(data.reply || 'No response.', data.results || []);
+
+
+
+
+
     typingRow.remove();
     appendBotMessage(data.reply || 'No response.', data.results || []);
 

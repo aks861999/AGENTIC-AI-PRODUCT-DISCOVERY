@@ -19,8 +19,21 @@ from api.nl_query import parse_nl_query, _resolve_attribute_filters
 import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from contextvars import ContextVar
+import time
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+# Per-request trace accumulator — safe with asyncio, no shared state
+_request_trace: ContextVar[list] = ContextVar('_request_trace', default=None)
+
+def _trace(msg: str, type: str = 'step'):
+    """Append a log line to the current request's trace, if one is active."""
+    t = _request_trace.get(None)
+    if t is not None:
+        t.append({'msg': msg, 'type': type, 'ts': time.time()})
 
 
 # ── State ──────────────────────────────────────────────────────────────────────
@@ -33,6 +46,16 @@ class ChatState(TypedDict):
 
 # ── In-memory session store (replace with Redis for production) ────────────────
 _sessions: dict[str, ChatState] = {}
+
+
+
+
+
+
+
+
+
+
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
@@ -119,40 +142,72 @@ def _active_system_prompt() -> str:
 
 @tool
 async def search_products(query: str) -> str:
-    """Search the product catalogue using natural language. Call this whenever the
-    user wants to find, get, show, browse, discover, or get recommendations for
-    any product , including casual phrases like 'get me X' or 'something for Y'."""
+    """Search the product catalogue using natural language."""
 
     client = deps.get_os_client()
     model  = deps.get_model()
     if client is None or model is None:
+        _trace('Search unavailable — client or model not initialised', 'error')
         return json.dumps({"text": "Search is temporarily unavailable.", "products": []})
 
     try:
+        _trace(f'LangGraph → chat_node → search_products tool called', 'step')
+        _trace(f'NL parse: invoking LLM on query="{query[:80]}"', 'llm')
+
         parsed = await parse_nl_query(query)
         search_q = parsed.semantic_query or query
+        raw_attrs = parsed.filters.attributes if parsed.filters.attributes else None
 
+        if raw_attrs:
+            _trace(f'LLM parsed intent: product="{search_q}", attrs={json.dumps(raw_attrs)}', 'llm')
+        else:
+            _trace(f'LLM parsed intent: product="{search_q}", no attributes detected', 'llm')
 
         logger.info(
             "search_products: query=%r parsed_semantic=%r filters=%s",
-            query, search_q, parsed.filters.attributes,
+            query, search_q, raw_attrs,
         )
 
         vector = await asyncio.to_thread(
             lambda: model.encode(search_q, normalize_embeddings=True).tolist()
         )
-        raw_attrs = parsed.filters.attributes if parsed.filters.attributes else None
+        _trace(f'Embedding: BAAI/bge-small-en-v1.5 → {len(vector)}-dim vector', 'dim')
 
-        resolved_attrs = await _resolve_attribute_filters(
-            client=client,
-            index_name=settings.index_name,
-            semantic_query=search_q,
-            model=model,
-            required_attributes=raw_attrs,
-        ) if raw_attrs else None
+        resolved_attrs = None
+        if raw_attrs:
+            # Temporarily capture SchemaLinker output by reading logs
+            # We instrument _resolve_attribute_filters to also return schema_links
+            resolved_attrs, schema_links = await _resolve_with_trace(
+                client=client,
+                index_name=settings.index_name,
+                semantic_query=search_q,
+                model=model,
+                required_attributes=raw_attrs,
+            )
+            if schema_links:
+                for lnk in schema_links:
+                    score = lnk.get('score', 0)
+                    color = 'filter' if score >= 0.70 else 'warn'
+                    _trace(
+                        f"SchemaLinker: '{lnk['from']}' → '{lnk['to']}' (sim={score:.3f})"
+                        + ('' if score >= 0.70 else ' ⚠ below threshold, attr dropped'),
+                        color
+                    )
+            if resolved_attrs:
+                _trace(f'Resolved attrs: {json.dumps(resolved_attrs)}', 'filter')
+            else:
+                _trace('⚠ No attrs survived SchemaLinker — running unfiltered search', 'warn')
+        else:
+            _trace('⊘ No attribute filters — running unfiltered hybrid search', 'step')
 
-        logger.info("DEBUG chatbot: raw_attrs=%s | resolved_attrs=%s", raw_attrs, resolved_attrs)
-
+        num_filters = len(resolved_attrs) if resolved_attrs else 0
+        _trace(
+            f'Building hybrid query: KNN×{settings.hybrid_knn_weight} + '
+            f'BM25×{settings.hybrid_bm25_weight}, '
+            f'{num_filters} attr filter(s), k={settings.knn_k}',
+            'step'
+        )
+        _trace(f'POST → AWS OpenSearch ({settings.opensearch_host.split(".")[2] if "." in settings.opensearch_host else "cluster"})', 'step')
 
         result = await hybrid_search(
             client=client,
@@ -162,43 +217,80 @@ async def search_products(query: str) -> str:
             required_attributes=resolved_attrs,
             size=5,
         )
+
         if not result.hits:
-            logger.info("search_products: 0 hits returned for query=%r resolved_attrs=%s", search_q, resolved_attrs)
+            logger.info("search_products: 0 hits for query=%r resolved_attrs=%s", search_q, resolved_attrs)
+            _trace(f'0 hits for query="{search_q}" — filters may have been relaxed or dropped', 'warn')
             return json.dumps({"text": "No products found for that query.", "products": []})
+
+        _trace(f'{len(result.hits)} hit(s) returned for query="{search_q}"', 'result')
+        for i, h in enumerate(result.hits[:3]):
+            _trace(f'  [{i+1}] #{h.product_uid}  {h.title[:50]}', 'result')
+
+        _trace(f'Gemini/Groq LLM generating natural language reply…', 'llm')
 
         products = []
         text_rows = []
         for i, h in enumerate(result.hits):
-            # Top 3 attributes as a readable string
-            attrs = ", ".join(
-                f"{a.name}: {a.value}" for a in h.attributes[:3]
-            ) if h.attributes else "N/A"
-
+            attrs = ", ".join(f"{a.name}: {a.value}" for a in h.attributes[:3]) if h.attributes else "N/A"
             products.append({
                 "id": h.id,
-                "product_uid": h.product_uid,
+                "productuid": h.product_uid,
                 "title": h.title,
-                "product_description": h.product_description[:150],
-                "bullet_points": h.bullet_points[:2],
+                "productdescription": h.product_description[:150],
+                "bulletpoints": h.bullet_points[:2],
                 "attributes": [{"name": a.name, "value": a.value} for a in h.attributes[:5]],
-                "primary_image_url": None,   # not in Home Depot dataset
             })
-            text_rows.append(
-                f"{i+1}. {h.title}\n"
-                f"   {h.product_description[:120]}...\n"
-                f"   Specs: {attrs}"
-            )
+            text_rows.append(f"{i+1}. {h.title}\n   {h.product_description[:120]}...\n   Specs: {attrs}")
 
         logger.info("search_products: %d hits returned for query=%r", len(result.hits), search_q)
-
-        return json.dumps({
-            "text": "\n".join(text_rows),
-            "products": products
-        }, ensure_ascii=False)
+        return json.dumps({"text": "\n".join(text_rows), "products": products}, ensure_ascii=False)
 
     except Exception as exc:
         logger.warning("search_products tool error: %s", exc)
+        _trace(f'✗ search_products error: {exc}', 'error')
         return json.dumps({"text": "Search failed, please try again.", "products": []})
+
+
+
+async def _resolve_with_trace(
+    client, index_name: str, semantic_query: str, model, required_attributes: dict
+) -> tuple[dict | None, list[dict]]:
+    """
+    Calls _resolve_attribute_filters AND captures per-attribute schema links.
+    Returns (resolved_attrs, schema_links).
+    schema_links: [{"from": "colour", "to": "Color/Finish", "score": 0.838}, ...]
+    """
+    from api.nl_query import _schema_linker
+
+    schema_links = []
+    # Call SchemaLinker directly to get scores per attribute
+    for raw_key in required_attributes:
+        try:
+            # _schema_linker.resolve_one returns (canonical_name, score) or None
+            result = await _schema_linker.resolve_one(
+                client, index_name, model, raw_key
+            )
+            if result:
+                canonical, score = result
+                schema_links.append({"from": raw_key, "to": canonical, "score": score})
+            else:
+                schema_links.append({"from": raw_key, "to": None, "score": 0.0})
+        except Exception:
+            # resolve_one may not exist — fall back to full resolve
+            pass
+
+    # Still call the original for the actual resolved dict
+    resolved = await _resolve_attribute_filters(
+        client=client,
+        index_name=index_name,
+        semantic_query=semantic_query,
+        model=model,
+        required_attributes=required_attributes,
+    )
+    return resolved, schema_links
+
+
 
 
 @tool
@@ -331,53 +423,79 @@ def _extract_text(content) -> str:
     return str(content)
 
 
-
 async def chat_turn(
     session_id: str,
     user_message: str,
     client: OpenSearch,
     model: SentenceTransformer,
 ) -> dict:
-    if session_id not in _sessions:
-        _sessions[session_id] = {
-            "messages": [],
+    # Activate per-request trace
+    trace: list[dict] = []
+    token = _request_trace.set(trace)
+
+    t_start = time.time()
+    _trace(f'Session: {session_id}', 'dim')
+    _trace(f'LangGraph graph invoked', 'step')
+
+    try:
+        if session_id not in _sessions:
+            _sessions[session_id] = {
+                "messages": [],
+                "session_id": session_id,
+                "last_results": [],
+                "last_query": None,
+            }
+
+        state = _sessions[session_id]
+        state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
+
+        graph = _build_graph(client, model)
+        new_state = await graph.ainvoke(state)
+
+        last_results: list[dict] = []
+        for msg in reversed(new_state["messages"]):
+            if isinstance(msg, ToolMessage) and getattr(msg, "name", None) == "search_products":
+                try:
+                    payload = json.loads(msg.content)
+                    if isinstance(payload, dict):
+                        last_results = payload.get("products", [])
+                except Exception:
+                    pass
+                break
+
+        # Check if this was a conversational query (no tool was called)
+        tool_was_called = any(
+            isinstance(m, ToolMessage) for m in new_state["messages"][-6:]
+        )
+        if not tool_was_called:
+            _trace('LangGraph: query classified as conversational — search skipped', 'step')
+            _trace('⊘ OpenSearch search skipped', 'dim')
+            _trace('LLM generating conversational reply…', 'llm')
+
+        new_state["last_results"] = last_results
+        _sessions[session_id] = new_state
+
+        last_ai_text = next(
+            (
+                _extract_text(m.content)
+                for m in reversed(new_state["messages"])
+                if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)
+            ),
+            "",
+        )
+
+        elapsed_ms = int((time.time() - t_start) * 1000)
+        _trace(f'Done in {elapsed_ms / 1000:.1f}s · {len(last_results)} product(s)', 'dim')
+
+        return {
             "session_id": session_id,
-            "last_results": [],
-            "last_query": None,
+            "reply": last_ai_text,
+            "results": last_results,
+            "debug": {
+                "trace": trace,           # full ordered event list
+                "hits": len(last_results),
+                "elapsed_ms": elapsed_ms,
+            },
         }
-
-    state = _sessions[session_id]
-    state["messages"] = list(state["messages"]) + [HumanMessage(content=user_message)]
-
-    graph = _build_graph(client, model)
-    new_state = await graph.ainvoke(state)
-
-    # ── NEW: extract product cards from the last search tool call ──
-    last_results: list[dict] = []
-    for msg in reversed(new_state["messages"]):
-        if isinstance(msg, ToolMessage) and getattr(msg, "name", None) == "search_products":
-            try:
-                payload = json.loads(msg.content)
-                if isinstance(payload, dict):
-                    last_results = payload.get("products", [])
-            except Exception:
-                pass
-            break
-
-    new_state["last_results"] = last_results
-    _sessions[session_id] = new_state
-
-    last_ai_text = next(
-        (
-            _extract_text(m.content)
-            for m in reversed(new_state["messages"])
-            if isinstance(m, AIMessage) and not getattr(m, "tool_calls", None)
-        ),
-        "",
-    )
-
-    return {
-        "session_id": session_id,
-        "reply": last_ai_text,
-        "results": last_results,
-    }
+    finally:
+        _request_trace.reset(token)   # always clean up ContextVar

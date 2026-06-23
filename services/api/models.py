@@ -41,6 +41,8 @@ class ChatResponse(BaseModel):
     session_id: str
     reply:      str
     results:    list[dict] = Field(default_factory=list)
+    debug: Optional[dict[str, Any]] = None
+
 
 class ProductAttribute(BaseModel):
     model_config = ConfigDict(from_attributes=True)

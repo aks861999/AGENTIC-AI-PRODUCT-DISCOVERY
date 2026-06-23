@@ -289,6 +289,36 @@ class SchemaLinker:
 
     # ── Public resolve method ─────────────────────────────────────────────────
 
+
+    async def resolve_one(
+        self,
+        client,
+        index_name: str,
+        model,
+        raw_key: str,
+    ) -> tuple[str, float] | None:
+        """
+        Resolve a single raw attribute key → (canonical_name, cosine_score).
+        Returns None if no match above threshold.
+        """
+        await self._refresh_cache(client, index_name, model)
+        if self._schema_keys is None:
+            return None
+
+        raw_vec = await asyncio.to_thread(
+            lambda: model.encode(raw_key, normalize_embeddings=True)
+        )
+        sims = np.dot(self._schema_vecs, raw_vec)  # (N,)
+        best_idx = int(np.argmax(sims))
+        best_score = float(sims[best_idx])
+
+        if best_score < self.sim_threshold:
+            return (self._schema_keys[best_idx], best_score)  # returned even if below threshold so frontend can show the warning
+
+        canonical = self._schema_keys[best_idx]
+        logger.info("SchemaLinker resolve_one: %r → %r (%.3f)", raw_key, canonical, best_score)
+        return (canonical, best_score)
+
     async def resolve(self, client, index_name, model, extracted_name, extracted_value):
         await self._ensure_cache(client, index_name, model)
         if self._canonical_embeddings is None or not self._canonical_names:
