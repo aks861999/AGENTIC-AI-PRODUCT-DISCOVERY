@@ -1111,7 +1111,6 @@ const CSV_URLS = {
   descriptions: 'https://cdn.jsdelivr.net/gh/aks861999/HOMEDEPOT-DATASET/product_descriptions_500.csv',
   attributes:   'https://cdn.jsdelivr.net/gh/aks861999/HOMEDEPOT-DATASET/attributes_500.csv',
 };
-const CSV_PREVIEW_ROWS = 500; // rows to render in the table
 
 const _csvCache  = {};   // key → { headers, rows }
 let _drawerOpen  = false;
@@ -1169,7 +1168,8 @@ function _parseCsv(text) {
   };
 
   const headers = splitLine(lines[0]);
-  const rows    = lines.slice(1, CSV_PREVIEW_ROWS + 1).map(splitLine);
+  const rows    = lines.slice(1).map(splitLine);
+
   const total   = lines.length - 1; // excludes header
   return { headers, rows, total };
 }
