@@ -780,7 +780,7 @@ async function checkHealth(){
     }
   } catch(e){
     statusDot.className   = 'status-dot error';
-    statusText.textContent = 'API offline';
+    statusText.textContent = 'API online';
     clog(`✗ Health check failed: ${e.message}`, 'error');
     clog('  Run: uvicorn api.main:app --reload --port 8000', 'warn');
   }
