@@ -339,6 +339,148 @@ details[open] .thinking-content {
 .thinking-spinning .th-icon { display: inline-block; animation: th-spin 1.2s linear infinite; }
 @keyframes th-spin { to { transform: rotate(360deg); } }
 
+
+/* ── Dataset Drawer ───────────────────────────────────────── */
+.dataset-drawer {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 54vh;
+  background: var(--color-surface);
+  border-top: 2px solid var(--color-primary);
+  box-shadow: var(--shadow-xl);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 0.30s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dataset-drawer.open { transform: translateY(0); }
+
+.drawer-handle {
+  width: 36px; height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  margin: 8px auto 0;
+  flex-shrink: 0;
+}
+.drawer-header {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-5) var(--space-1);
+  flex-shrink: 0;
+}
+.drawer-title {
+  font-size: var(--text-sm); font-weight: 600;
+  color: var(--color-text); flex: 1;
+  display: flex; align-items: center; gap: 8px;
+}
+.drawer-title-sub {
+  font-size: var(--text-xs); color: var(--color-text-faint);
+  font-weight: 400; font-family: var(--font-mono);
+}
+.drawer-close {
+  width: 28px; height: 28px;
+  border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--color-text-muted);
+  transition: background var(--transition), color var(--transition);
+}
+.drawer-close:hover { background: var(--color-surface-offset); color: var(--color-text); }
+
+.drawer-tabs {
+  display: flex; gap: 2px;
+  padding: 0 var(--space-5) var(--space-2);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+.drawer-tab {
+  font-size: var(--text-xs); font-weight: 500;
+  padding: 5px 14px;
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: all var(--transition);
+  cursor: pointer;
+}
+.drawer-tab:hover { background: var(--color-surface-offset); color: var(--color-text); }
+.drawer-tab.active {
+  background: var(--color-primary-highlight);
+  color: var(--color-primary);
+  border-color: oklch(from var(--color-primary) l c h / 0.25);
+}
+
+.drawer-pane {
+  display: none; flex: 1; overflow: hidden; flex-direction: column;
+  min-height: 0;
+}
+.drawer-pane.active { display: flex; }
+
+.drawer-loading {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; flex: 1;
+  font-size: var(--text-sm); color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.drawer-table-meta {
+  font-size: 11px; color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  padding: 6px var(--space-5);
+  border-bottom: 1px solid var(--color-divider);
+  flex-shrink: 0;
+}
+.drawer-table-wrap {
+  flex: 1; overflow: auto;
+  padding: 0 var(--space-5) var(--space-4);
+}
+.drawer-table-wrap::-webkit-scrollbar { width: 4px; height: 4px; }
+.drawer-table-wrap::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
+
+.dataset-table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--font-mono); font-size: 11.5px;
+  margin-top: var(--space-2);
+}
+.dataset-table thead th {
+  text-align: left;
+  padding: 6px 10px;
+  font-weight: 600; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-primary);
+  background: var(--color-surface-offset);
+  border-bottom: 2px solid var(--color-border);
+  position: sticky; top: 0; z-index: 1;
+  white-space: nowrap;
+}
+.dataset-table tbody tr { border-bottom: 1px solid var(--color-divider); }
+.dataset-table tbody tr:hover { background: var(--color-surface-offset); }
+.dataset-table tbody td {
+  padding: 5px 10px;
+  color: var(--color-text-muted);
+  vertical-align: top;
+  max-width: 420px;
+  line-height: 1.45;
+}
+.dataset-table tbody td:first-child {
+  color: var(--color-text-faint); font-size: 11px;
+  white-space: nowrap; min-width: 80px;
+}
+/* desc column: allow wrap */
+.dataset-table tbody td:last-child { word-break: break-word; }
+
+/* Dataset toggle button active state */
+.icon-btn.dataset-active {
+  background: var(--color-primary-highlight);
+  color: var(--color-primary);
+}
+
+@media (max-width: 768px) {
+  .dataset-drawer { height: 70vh; }
+  .drawer-title-sub { display: none; }
+  .drawer-table-wrap { padding: 0 var(--space-3) var(--space-3); }
+  .dataset-table { font-size: 10.5px; }
+}
+
 </style>
 </head>
 <body>
@@ -356,6 +498,13 @@ details[open] .thinking-content {
     <span class="api-badge" id="apiUrlBadge">Deployed on EC2</span>
   </div>
   <div class="topbar-actions">
+    <button class="icon-btn" id="datasetBtn" aria-label="Browse dataset" title="Browse CSV dataset">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+      </svg>
+    </button>
     <button class="icon-btn" data-theme-toggle aria-label="Toggle theme" title="Toggle dark/light mode">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
@@ -420,6 +569,47 @@ details[open] .thinking-content {
       </button>
     </div>
     <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- ── Dataset Drawer ──────────────────────────────────────── -->
+<div class="dataset-drawer" id="datasetDrawer" role="dialog" aria-label="Dataset browser">
+  <div class="drawer-handle"></div>
+  <div class="drawer-header">
+    <div class="drawer-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+      </svg>
+      Kaggle Home Depot Dataset
+      <span class="drawer-title-sub">home_depot_data/ · 50 k products</span>
+    </div>
+    <button class="drawer-close" id="drawerClose" aria-label="Close dataset viewer">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+  </div>
+  <div class="drawer-tabs">
+    <button class="drawer-tab active" data-tab="descriptions">product_descriptions.csv</button>
+    <button class="drawer-tab"        data-tab="attributes">attributes.csv</button>
+  </div>
+
+  <!-- Descriptions pane -->
+  <div class="drawer-pane active" data-pane="descriptions">
+    <div class="drawer-loading">
+      <span style="display:inline-block;animation:th-spin 1s linear infinite">⟳</span>
+      Loading product_descriptions.csv…
+    </div>
+  </div>
+
+  <!-- Attributes pane -->
+  <div class="drawer-pane" data-pane="attributes">
+    <div class="drawer-loading">
+      <span style="display:inline-block;animation:th-spin 1s linear infinite">⟳</span>
+      Loading attributes.csv…
+    </div>
   </div>
 </div>
 
@@ -590,7 +780,7 @@ async function checkHealth(){
     }
   } catch(e){
     statusDot.className   = 'status-dot error';
-    statusText.textContent = 'API online';
+    statusText.textContent = 'API offline';
     clog(`✗ Health check failed: ${e.message}`, 'error');
     clog('  Run: uvicorn api.main:app --reload --port 8000', 'warn');
   }
@@ -902,6 +1092,143 @@ modalBox.addEventListener('keydown', e=>{
 chatInput.focus();
 
 
+
+
+// ── Dataset Drawer ────────────────────────────────────────────────────────
+//
+// WHERE TO HOST YOUR CSV FILES FOR FREE:
+//   Best option: commit them to your GitHub repo and use raw.githubusercontent.com
+//   e.g. https://raw.githubusercontent.com/<user>/<repo>/main/volumes/home_depot_data/file.csv
+//
+//   For faster delivery use jsDelivr CDN (caches GitHub content, free):
+//   e.g. https://cdn.jsdelivr.net/gh/<user>/<repo>@main/volumes/home_depot_data/file.csv
+//
+//   Tip for large files: commit a sampled version (first 500 rows) so the
+//   browser doesn't have to fetch 20 MB. Use: head -501 file.csv > sample.csv
+//
+// ─ Update these two URLs to your actual hosted files: ─────────────────────
+
+const CSV_URLS = {
+  descriptions: 'https://cdn.jsdelivr.net/gh/aks861999/HOMEDEPOT-DATASET/product_descriptions_500.csv',
+  attributes:   'https://cdn.jsdelivr.net/gh/aks861999/HOMEDEPOT-DATASET/attributes_500.csv',
+};
+const CSV_PREVIEW_ROWS = 500; // rows to render in the table
+
+const _csvCache  = {};   // key → { headers, rows }
+let _drawerOpen  = false;
+let _activeTab   = 'descriptions';
+const _paneLoaded = {};  // track which panes have been fetched
+
+function toggleDatasetDrawer() {
+  _drawerOpen = !_drawerOpen;
+  const drawer = document.getElementById('datasetDrawer');
+  const btn    = document.getElementById('datasetBtn');
+  drawer.classList.toggle('open', _drawerOpen);
+  btn.classList.toggle('dataset-active', _drawerOpen);
+  if (_drawerOpen && !_paneLoaded[_activeTab]) _loadCsvPane(_activeTab);
+}
+
+function closeDatasetDrawer() {
+  _drawerOpen = false;
+  document.getElementById('datasetDrawer').classList.remove('open');
+  document.getElementById('datasetBtn').classList.remove('dataset-active');
+}
+
+document.getElementById('datasetBtn').addEventListener('click', toggleDatasetDrawer);
+document.getElementById('drawerClose').addEventListener('click', closeDatasetDrawer);
+
+document.querySelectorAll('.drawer-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    if (tab === _activeTab) return;
+    _activeTab = tab;
+    document.querySelectorAll('.drawer-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.querySelectorAll('.drawer-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === tab));
+    if (!_paneLoaded[tab]) _loadCsvPane(tab);
+  });
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && _drawerOpen) closeDatasetDrawer();
+});
+
+// Simple CSV parser — handles basic quoting, no nested commas in mid-field
+function _parseCsv(text) {
+  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const splitLine = line => {
+    const cols = []; let inQ = false, cur = '';
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    cols.push(cur.trim());
+    return cols;
+  };
+
+  const headers = splitLine(lines[0]);
+  const rows    = lines.slice(1, CSV_PREVIEW_ROWS + 1).map(splitLine);
+  const total   = lines.length - 1; // excludes header
+  return { headers, rows, total };
+}
+
+async function _loadCsvPane(tab) {
+  const pane = document.querySelector(`.drawer-pane[data-pane="${tab}"]`);
+  if (!pane) return;
+
+  // Serve from cache if available
+  if (_csvCache[tab]) { _renderTable(pane, _csvCache[tab]); _paneLoaded[tab] = true; return; }
+
+  pane.innerHTML = `<div class="drawer-loading">
+    <span style="display:inline-block;animation:th-spin 1s linear infinite">⟳</span>
+    Fetching ${tab === 'descriptions' ? 'product_descriptions.csv' : 'attributes.csv'}…
+  </div>`;
+
+  try {
+    const resp = await fetch(CSV_URLS[tab]);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    _csvCache[tab] = _parseCsv(text);
+    _renderTable(pane, _csvCache[tab]);
+    _paneLoaded[tab] = true;
+  } catch (err) {
+    pane.innerHTML = `<div class="drawer-loading" style="flex-direction:column;gap:10px;text-align:center">
+      <span style="color:var(--color-error);font-size:var(--text-sm)">✗ ${escHtml(err.message)}</span>
+      <span style="color:var(--color-text-faint);font-size:var(--text-xs);max-width:420px">
+        Update <code style="background:var(--color-surface-offset);padding:1px 6px;border-radius:4px">CSV_URLS.${escHtml(tab)}</code>
+        in demo.html to your GitHub raw URL, then refresh.
+      </span>
+    </div>`;
+  }
+}
+
+function _renderTable(pane, { headers, rows, total }) {
+  const shown   = rows.length;
+  const fileKey = _activeTab === 'descriptions' ? 'product_descriptions_50k.csv' : 'attributes_50k.csv';
+  const colCount = headers.length;
+  const metaText = `Showing ${shown.toLocaleString()} of ~${total.toLocaleString()} rows · ${colCount} columns · ${fileKey} · Kaggle Home Depot Product Search`;
+
+  const thead = headers.map(h => `<th>${escHtml(h)}</th>`).join('');
+  const tbody = rows.map(row => {
+    const cells = headers.map((_, ci) => {
+      const val = (row[ci] || '').slice(0, 150);
+      return `<td title="${escHtml(row[ci] || '')}">${escHtml(val)}${(row[ci]||'').length > 150 ? '…' : ''}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+
+  pane.innerHTML = `
+    <div class="drawer-table-meta">${escHtml(metaText)}</div>
+    <div class="drawer-table-wrap">
+      <table class="dataset-table" aria-label="${escHtml(fileKey)} preview">
+        <thead><tr>${thead}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>`;
+}
 
 </script>
 
