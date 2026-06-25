@@ -1,3 +1,4 @@
+================================================
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -426,28 +427,26 @@ details[open] .thinking-content {
 <script>
 
 // ── Per-query Thinking Block ──────────────────────────────────
-let _thinkingLogs = [];   // buffer for current query
-let _thinkingBlock = null; // current <details> DOM node
+let _thinkingBlock   = null;  // current <details> DOM node
 let _thinkingContent = null;
 let _thinkingHeader  = null;
 let _thinkingStart   = 0;
+let _loadingTimers   = [];    // setTimeout handles for pre-response animation
 
 function pad2(n){ return String(n).padStart(2,'0'); }
 function ts(){const d=new Date();return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 function startThinkingBlock(parentEl) {
-  _thinkingLogs = [];
   _thinkingStart = Date.now();
 
   const details = document.createElement('details');
   details.className = 'thinking-block thinking-spinning';
   details.setAttribute('open', '');
-
   details.innerHTML = `
     <summary class="thinking-header">
       <span class="th-icon">⟳</span>
-      <span class="th-label">Thinking…</span>
+      <span class="th-label">Reasoning…</span>
       <span class="th-chevron">▸</span>
     </summary>
     <div class="thinking-content"></div>`;
@@ -456,31 +455,94 @@ function startThinkingBlock(parentEl) {
   _thinkingHeader  = details.querySelector('.thinking-header');
   _thinkingContent = details.querySelector('.thinking-content');
   parentEl.appendChild(details);
+
+  // Animate plausible pipeline steps while waiting for the real response
+  _startLoadingAnimation();
   return details;
 }
 
-function addThinkingLine(msg, type) {
-  if (!_thinkingContent) return;
-  _thinkingLogs.push({ msg, type });
-  const line = document.createElement('div');
-  line.className = 'thinking-line';
-  line.innerHTML = `<span class="th-ts">${ts()}</span><span class="th-msg type-${type}">${escHtml(msg)}</span>`;
-  _thinkingContent.appendChild(line);
-  _thinkingContent.scrollTop = _thinkingContent.scrollHeight;
+// Staggered loading hints — visible while the HTTP request is in-flight.
+// Timings are spread over ~16s to cover the LangGraph + LLM round-trip.
+function _startLoadingAnimation() {
+  const phases = [
+    { msg: 'LangGraph agent activated — routing query…',               type: 'step',   delay:  800 },
+    { msg: 'NL parser: decomposing query intent with LLM…',            type: 'llm',    delay: 2400 },
+    { msg: 'Extracting semantic query + attribute filters…',            type: 'llm',    delay: 4200 },
+    { msg: 'Encoding query → 384-dim vector (BAAI/bge-small-en-v1.5)…',type: 'dim',    delay: 6000 },
+    { msg: 'SchemaLinker: resolving attribute keys against index…',     type: 'filter', delay: 8000 },
+    { msg: 'Building hybrid KNN × BM25 query with attr filters…',      type: 'step',   delay:10500 },
+    { msg: 'POST → AWS OpenSearch (hybrid-search-pipeline)…',          type: 'step',   delay:12000 },
+    { msg: 'Ranking hits with Reciprocal Rank Fusion…',                type: 'step',   delay:14000 },
+    { msg: 'LLM composing natural language reply…',                    type: 'llm',    delay:16000 },
+  ];
+  _loadingTimers = [];
+  phases.forEach(({ msg, type, delay }) => {
+    _loadingTimers.push(setTimeout(() => {
+      if (_thinkingContent) _appendLine(_thinkingContent, msg, type);
+    }, delay));
+  });
 }
 
-function finaliseThinkingBlock(hitCount) {
+function _stopLoadingAnimation() {
+  _loadingTimers.forEach(clearTimeout);
+  _loadingTimers = [];
+}
+
+// Low-level: append a single timestamped log line to any content node
+function _appendLine(contentEl, msg, type) {
+  const line = document.createElement('div');
+  line.className = 'thinking-line';
+  line.innerHTML = `<span class="th-ts">${ts()}</span><span class="th-msg type-${escHtml(type||'step')}">${escHtml(msg)}</span>`;
+  contentEl.appendChild(line);
+  contentEl.scrollTop = contentEl.scrollHeight;
+}
+
+// Public helper for adding a line during loading (used for the initial query line)
+function addThinkingLine(msg, type) {
+  if (_thinkingContent) _appendLine(_thinkingContent, msg, type);
+}
+
+// Called once the API response arrives.
+// Stops the loading animation, replaces placeholder lines with the REAL backend
+// trace (animated in at 55 ms/entry), updates the header, then auto-collapses.
+// The <details> element stays in the DOM so the user can re-open it.
+function finaliseThinkingBlock(hitCount, traceEntries) {
   if (!_thinkingBlock) return;
-  const elapsed = ((Date.now() - _thinkingStart) / 1000).toFixed(1);
-  _thinkingBlock.classList.remove('thinking-spinning');
-  _thinkingHeader.querySelector('.th-icon').textContent = '🧠';
-  _thinkingHeader.querySelector('.th-label').textContent =
-    `Thought for ${elapsed}s · ${hitCount} product${hitCount !== 1 ? 's' : ''} found`;
-  // Auto-collapse after answer is rendered
-  setTimeout(() => { _thinkingBlock.removeAttribute('open'); }, 600);
-  _thinkingBlock   = null;
-  _thinkingContent = null;
-  _thinkingHeader  = null;
+
+  _stopLoadingAnimation();
+
+  const elapsed  = ((Date.now() - _thinkingStart) / 1000).toFixed(1);
+  // Capture local refs and immediately release globals so a new query can start
+  const block   = _thinkingBlock;
+  const content = _thinkingContent;
+  const header  = _thinkingHeader;
+  _thinkingBlock = _thinkingContent = _thinkingHeader = null;
+
+  const entries   = Array.isArray(traceEntries) && traceEntries.length ? traceEntries : [];
+  const STAGGER   = 55; // ms between entries
+  const totalAnim = entries.length * STAGGER;
+
+  if (entries.length > 0) {
+    // Replace loading-animation placeholder lines with the real backend trace
+    content.innerHTML = '';
+    entries.forEach((entry, i) => {
+      setTimeout(() => _appendLine(content, entry.msg, entry.type || 'step'), i * STAGGER);
+    });
+  }
+  // If entries is empty (error / conversational / no trace), keep whatever is
+  // already showing (e.g. the error line we added just before this call).
+
+  // After last entry: update header label + auto-collapse
+  setTimeout(() => {
+    block.classList.remove('thinking-spinning');
+    const icon  = header.querySelector('.th-icon');
+    const label = header.querySelector('.th-label');
+    if (icon)  icon.textContent  = '🧠';
+    if (label) label.textContent =
+      `Reasoned for ${elapsed}s · ${hitCount} product${hitCount !== 1 ? 's' : ''} found`;
+    // Collapse after a short pause so user can see the last line
+    setTimeout(() => block.removeAttribute('open'), 650);
+  }, totalAnim + 120);
 }
 
 
@@ -601,61 +663,47 @@ async function doSend(){
 
   appendUserMsg(text);
 
-  // Create typing row + attach thinking block to it
+  // ── 1. Persistent thinking row — stays in chat after answer ──
+  // NOT nested inside typingRow, so removing typing dots never kills it.
+  const thinkingRow = document.createElement('div');
+  thinkingRow.className = 'msg-row bot';
+  thinkingRow.innerHTML = `
+    <div class="msg-avatar bot" aria-hidden="true">K</div>
+    <div class="msg-content thinking-msg-content"></div>`;
+  messagesEl.appendChild(thinkingRow);
+  startThinkingBlock(thinkingRow.querySelector('.thinking-msg-content'));
+  addThinkingLine(`► Query: "${text.slice(0,80)}${text.length>80?'…':''}"`, 'info');
+
+  // ── 2. Separate temporary typing-dots row ──
   const typingRow = appendTyping();
-  const thinkingContainer = typingRow.querySelector('.msg-content');
-  startThinkingBlock(thinkingContainer);
-
-  addThinkingLine(`► Query: "${text.slice(0,75)}${text.length>75?'…':''}"`, 'info');
-
-  const t0 = Date.now();
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 
   try{
-    addThinkingLine(`POST ${API_BASE}/chat`, 'step');
     const res = await fetch(`${API_BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, sessionid: SESSION_ID })
     });
 
-    const elapsed = Date.now() - t0;
-    addThinkingLine('── OpenSearch hybrid pipeline ──', 'step');
-    addThinkingLine('  search_pipeline: hybrid-search-pipeline', 'dim');
-    addThinkingLine('  KNN weight: 0.6  BM25 weight: 0.4  k=150', 'dim');
-    addThinkingLine('  Embedding: BAAI/bge-small-en-v1.5 (dim=384)', 'dim');
-    addThinkingLine(`← HTTP ${res.status}  ${elapsed}ms`, res.ok ? 'result' : 'error');
-
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const data = await res.json();
-
-    // ── Render real backend trace into thinking block ──
-    if (data.debug && Array.isArray(data.debug.trace) && data.debug.trace.length > 0) {
-      data.debug.trace.forEach(entry => {
-        addThinkingLine(entry.msg, entry.type || 'step');
-      });
-    } else {
-      // Graceful fallback for any query type where trace is empty
-      addThinkingLine('Pipeline executed (no trace data returned)', 'dim');
-    }
-
-    const hits = (data.results && data.results.length) || 0;
-    finaliseThinkingBlock(hits);
-    typingRow.remove();
-    appendBotMessage(data.reply || 'No response.', data.results || []);
-
-
-
-
+    const data  = await res.json();
+    const hits  = (data.results && data.results.length) || 0;
+    const trace = (data.debug && Array.isArray(data.debug.trace)) ? data.debug.trace : [];
 
     typingRow.remove();
+
+    // Animate real backend trace into the persistent block, then auto-collapse.
+    // The <details> element stays in the DOM — click header to re-open.
+    finaliseThinkingBlock(hits, trace);
+
+    // Show the answer right away (appears below the still-animating block)
     appendBotMessage(data.reply || 'No response.', data.results || []);
 
   } catch(err){
-    const elapsed = Date.now() - t0;
-    addThinkingLine(`✗ Error after ${elapsed}ms: ${err.message}`, 'error');
-    addThinkingLine('  Is uvicorn running? Check terminal.', 'warn');
-    finaliseThinkingBlock(0);
+    _stopLoadingAnimation();
+    addThinkingLine(`✗ Error: ${err.message}`, 'error');
+    finaliseThinkingBlock(0, []);
     typingRow.remove();
     appendUserMsg2bot('Could not reach the API. Make sure the server is running on port 8000.');
   } finally{
