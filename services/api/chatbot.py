@@ -368,7 +368,7 @@ async def chat_node(
     if settings.groq_api_key:
         providers.append(("groq", lambda: _build_groq_llm()))
 
-    await asyncio.sleep(10)
+    #await asyncio.sleep(10)
     response = None
     for name, llm_factory in providers:
         try:
