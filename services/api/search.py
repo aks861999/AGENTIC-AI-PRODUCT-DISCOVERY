@@ -196,12 +196,15 @@ async def hybrid_search(
             response = _parse_response(raw, SearchMode.hybrid)
         except Exception as exc:
             logger.warning("Hybrid execution failed (%s); reverting to lexical fallback.", exc)
-            body2 = _build_lexical_query(query, filters, size, from_)
 
-            raw = await asyncio.to_thread(
-                client.search, index=index_name, body=body2, request_timeout=15,
+            response = await lexical_search(
+                client=client,
+                query=query,
+                index_name=index_name,
+                required_attributes=attrs_to_try,
+                size=size,
+                from_=from_,
             )
-            response = _parse_response(raw, SearchMode.lexical)
 
         if len(response.hits) > 0 or not attrs_to_try:
             if dropped:

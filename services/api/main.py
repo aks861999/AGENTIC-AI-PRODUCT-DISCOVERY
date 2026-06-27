@@ -30,63 +30,18 @@ from api.nl_query import _schema_linker
 from api.nl_query import nl_search, _resolve_attribute_filters
 from api.search import hybrid_search, lexical_search, semantic_search
 from api.chatbot import chat_turn
-from api.cart import create_checkout_session, add_line_item, get_session, complete_checkout
 import api.dependencies as _deps
 from shared.config.settings import get_settings
 
 import asyncio
-from sse_starlette.sse import EventSourceResponse  # pip install sse-starlette
-from collections import deque
-
-# Module-level log queue (holds last 200 lines)
-_log_queue: asyncio.Queue = None
-_log_buffer: deque = deque(maxlen=200)
-
-# Lines to HIDE — AWS endpoints and raw httpx API calls
-_HIDE_PATTERNS = [
-    "amazonaws.com",
-    "httpx HTTP Request",
-    "google_genai.models",
-    "generativelanguage.googleapis.com",
-    "api.groq.com",
-    "AFC is enabled",
-    "sentence_transformers",
-    "opensearch GET",           # cluster health checks
-    "opensearch POST",          # raw OpenSearch calls
-]
-
-class SSELogHandler(logging.Handler):
-    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-        super().__init__()
-        self._queue = queue
-        self._loop = loop
-
-    def emit(self, record: logging.LogRecord):
-        msg = self.format(record)
-        # Filter out noise
-        if any(p in msg for p in _HIDE_PATTERNS):
-            return
-        # Only show our app loggers
-        if not any(record.name.startswith(p) for p in ("api.", "shared.")):
-            return
-        try:
-            self._loop.call_soon_threadsafe(self._queue.put_nowait, msg)
-        except Exception:
-            pass
-
-
-# In lifespan(), after _embedding_model is set:
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _log_queue
     _log_queue = asyncio.Queue(maxsize=500)
-    loop = asyncio.get_event_loop()
 
-    sse_handler = SSELogHandler(_log_queue, loop)
-    sse_handler.setFormatter(logging.Formatter("%(name)s %(message)s"))
-    logging.getLogger().addHandler(sse_handler)
+
 
     global _os_client, _embedding_model
     logger.info("Starting up Search API...")
@@ -115,12 +70,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(na
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-def _require_full_commerce():
-    if settings.agent_mode != "full_commerce":
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Cart and checkout endpoints are disabled. Set AGENT_MODE=full_commerce in .env to enable them.",
-        )
+
 
 _os_client: Optional[OpenSearch] = None
 _embedding_model: Optional[SentenceTransformer] = None
@@ -266,42 +216,3 @@ async def chat(request: ChatRequest, client: OpenSearch = Depends(_deps.get_os_c
     result["reply"] = reply
     return ChatResponse(**result)
 
-class CreateSessionRequest(_BM):
-    product_id:  str
-    title:       str
-    price_cents: int
-    quantity:    int = 1
-
-class AddLineItemRequest(_BM):
-    product_id:  str
-    title:       str
-    price_cents: int
-    quantity:    int = 1
-
-class CheckoutRequest(_BM):
-    session_id:    str
-    payment_token: str = "success_token"
-
-@app.post("/cart/session", tags=["cart"])
-async def create_session(req: CreateSessionRequest, _: None = Depends(_require_full_commerce)) -> dict:
-    return create_checkout_session(product_id=req.product_id, title=req.title, price_cents=req.price_cents, quantity=req.quantity).model_dump()
-
-@app.post("/cart/{session_id}/add", tags=["cart"])
-async def add_item(session_id: str, req: AddLineItemRequest, _: None = Depends(_require_full_commerce)) -> dict:
-    try:
-        return add_line_item(session_id=session_id, product_id=req.product_id, title=req.title, price_cents=req.price_cents, quantity=req.quantity).model_dump()
-    except KeyError:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-@app.get("/cart/{session_id}", tags=["cart"])
-async def view_session(session_id: str, _: None = Depends(_require_full_commerce)) -> dict:
-    session = get_session(session_id)
-    if session is None: raise HTTPException(status_code=404, detail="Session not found")
-    return session.model_dump()
-
-@app.post("/cart/checkout", tags=["cart"])
-async def checkout(req: CheckoutRequest, _: None = Depends(_require_full_commerce)) -> dict:
-    try:
-        return complete_checkout(session_id=req.session_id, payment_token=req.payment_token).model_dump()
-    except KeyError as exc: raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc: raise HTTPException(status_code=402, detail=str(exc))

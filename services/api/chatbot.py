@@ -58,42 +58,6 @@ _sessions: dict[str, ChatState] = {}
 
 
 
-# ── LLM factory ───────────────────────────────────────────────────────────────
-def _get_llm() -> ChatGoogleGenerativeAI:
-    """Return LLM instance. Tries Gemini first, falls back to Groq."""
-    # 1. Gemini (primary)
-    if settings.google_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            logger.info("Chatbot LLM: using Google Gemini (%s)", settings.llm_model)
-            return ChatGoogleGenerativeAI(
-                model=settings.llm_model,
-                temperature=0.3,
-                google_api_key=settings.google_api_key,
-            )
-        except Exception as exc:
-            logger.warning("Chatbot: Gemini init failed (%s) — trying Groq.", exc)
-
-    # 2. Groq (fallback)
-    if settings.groq_api_key:
-        try:
-            from langchain_openai import ChatOpenAI
-            logger.info("Chatbot LLM: using Groq (%s)", settings.groq_model)
-            return ChatOpenAI(
-                model=settings.groq_model,
-                temperature=0.3,
-                openai_api_key=settings.groq_api_key,
-                openai_api_base="https://api.groq.com/openai/v1",
-            )
-        except Exception as exc:
-            logger.warning("Chatbot: Groq init failed (%s).", exc)
-
-    raise RuntimeError(
-        "No LLM provider available. Set GOOGLE_API_KEY or GROQ_API_KEY in .env"
-    )
-
-
-
 
 SEARCH_ONLY_PROMPT = """You are a helpful home improvement product search assistant.
 You have access to one tool:
@@ -111,30 +75,6 @@ and brand.
 
 When presenting results, list them clearly and ask if the user wants to search further.
 """
-
-FULL_COMMERCE_PROMPT = """You are a helpful product search assistant.
-You have access to three tools:
-- **search_products**: call this for ANY request to find, get, show, recommend,
-  or browse products , including phrases like "get me X", "any good Y", "I need Z",
-  "something for winter", "show me cream", etc.
-- **ucp_add_to_cart**: call this when a user wants to add a specific product to their cart.
-- **ucp_checkout**: call this when the user wants to pay or complete their order.
-
-Always call search_products first whenever the user expresses any product need.
-When search_products returns a JSON object, present the products to the user using
-the "text" field only. Do not output raw JSON. The "products" array is internal
-UI data and should not be mentioned.
-
-When presenting results, list them clearly and ask if the user wants to add any to their cart.
-When a user says "add the first one" or "buy it", call ucp_add_to_cart with the correct details.
-Keep responses concise and product-focused.
-
-If the price shows as N/A or is unknown, pass price_cents=0.
-Never refuse to add due to a missing price; use price_cents=0 as a placeholder.
-"""
-
-def _active_system_prompt() -> str:
-    return FULL_COMMERCE_PROMPT if settings.agent_mode == "full_commerce" else SEARCH_ONLY_PROMPT
 
 
 
@@ -293,38 +233,9 @@ async def _resolve_with_trace(
 
 
 
-@tool
-def ucp_add_to_cart(product_id: str, title: str, price_cents: int = 0) -> str:
-    """Add a product to a UCP checkout session.
-    price_cents is the price in cents (e.g. 1999 = €19.99).
-    """
-    session = create_checkout_session(product_id, title, price_cents)
-    total = sum(li.item.price * li.quantity for li in session.line_items) / 100
-    return (
-        f"✅ Added '{title}' to cart.\n"
-        f"UCP Session ID: {session.id}\n"
-        f"Cart total: €{total:.2f}"
-    )
-
-
-@tool
-def ucp_checkout(session_id: str) -> str:
-    """Complete a UCP checkout session and place the order."""
-    order = complete_checkout(session_id)
-    return (
-        f"🎉 Order confirmed!\n"
-        f"Order ID : {order.id}\n"
-        f"Status   : {order.status}\n"
-        f"Total    : €{order.total:.2f}"
-    )
-
 
 
 _SEARCH_ONLY_TOOLS = [search_products]
-_FULL_COMMERCE_TOOLS = [search_products, ucp_add_to_cart, ucp_checkout]
-
-def _active_tools() -> list:
-    return _FULL_COMMERCE_TOOLS if settings.agent_mode == "full_commerce" else _SEARCH_ONLY_TOOLS
 
 
 def _build_gemini_llm():
@@ -353,12 +264,11 @@ async def chat_node(
     model: SentenceTransformer,
 ) -> ChatState:
     
-    tools = _active_tools()                      
-    llm = _get_llm().bind_tools(tools)
+    tools = _SEARCH_ONLY_TOOLS                 
 
 
     full_messages = (
-        [SystemMessage(content=_active_system_prompt())]  # ← was SYSTEM_PROMPT
+        [SystemMessage(content=SEARCH_ONLY_PROMPT)]  # ← was SYSTEM_PROMPT
         + list(state["messages"])
     )
 
@@ -396,7 +306,7 @@ def _route(state: ChatState) -> Literal["tools", "end"]:
 def _build_graph(client: OpenSearch, model: SentenceTransformer):
     async def _chat(state): return await chat_node(state, client, model)
 
-    tool_node = ToolNode(_active_tools())         
+    tool_node = ToolNode(_SEARCH_ONLY_TOOLS)         
 
     g = StateGraph(ChatState)
     g.add_node("chat", _chat)

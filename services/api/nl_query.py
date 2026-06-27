@@ -302,20 +302,20 @@ class SchemaLinker:
         Returns None if no match above threshold.
         """
         await self._refresh_cache(client, index_name, model)
-        if self._schema_keys is None:
+        if self._canonical_names is None:
             return None
 
         raw_vec = await asyncio.to_thread(
             lambda: model.encode(raw_key, normalize_embeddings=True)
         )
-        sims = np.dot(self._schema_vecs, raw_vec)  # (N,)
+        sims = np.dot(self._canonical_embeddings, raw_vec)  # (N,)
         best_idx = int(np.argmax(sims))
         best_score = float(sims[best_idx])
 
-        if best_score < self.sim_threshold:
-            return (self._schema_keys[best_idx], best_score)  # returned even if below threshold so frontend can show the warning
+        if best_score < self._EMBED_THRESHOLD:
+            return (self._canonical_names[best_idx], best_score)  # returned even if below threshold so frontend can show the warning
 
-        canonical = self._schema_keys[best_idx]
+        canonical = self._canonical_names[best_idx]
         logger.info("SchemaLinker resolve_one: %r → %r (%.3f)", raw_key, canonical, best_score)
         return (canonical, best_score)
 
