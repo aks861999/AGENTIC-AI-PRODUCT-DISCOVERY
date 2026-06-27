@@ -9,74 +9,78 @@
 <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Inter:wght@300..700&display=swap" rel="stylesheet">
 <style>
 :root, [data-theme="light"] {
-    --color-bg: #ffffff;
-    --color-surface: #ffffff;
-    --color-surface-2: #f8f9fa;
-    --color-surface-offset: #f1f3f4;
-    --color-surface-dynamic: #e8eaed;
-    --color-divider: #dadce0;
-    --color-border: #dadce0;
-    --color-text: #202124;
-    --color-text-muted: #5f6368;
-    --color-text-faint: #80868b;
-    --color-text-inverse: #ffffff;
-    --color-primary: #1a73e8;
-    --color-primary-hover: #1557b0;
-    --color-primary-highlight: #e8f0fe;
-    --color-success: #137333;
-    --color-success-highlight: #e6f4ea;
-    --color-warning: #b06000;
-    --color-error: #c5221f;
-    --color-console-bg: #202124;
-    --color-console-text: #34a853;
-    --color-console-muted: #5f6368;
-    --color-console-info: #4285f4;
-    --color-console-warn: #fbbc04;
-    --color-console-error: #ea4335;
-    --color-console-border: #303134;
-    --radius-sm: 0.25rem;
-    --radius-md: 0.375rem;
-    --radius-lg: 0.5rem;
-    --radius-xl: 1.5rem;
-    --radius-full: 9999px;
-    --shadow-sm: 0 1px 3px rgba(60,64,67,0.1);
-    --shadow-md: 0 2px 6px rgba(60,64,67,0.15);
-    --shadow-lg: 0 4px 12px rgba(60,64,67,0.2);
-    --shadow-xl: 0 8px 24px rgba(60,64,67,0.25);
-    --transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
-    --font-body: 'Google Sans', Roboto, Arial, sans-serif;
-    --font-mono: 'Roboto Mono', monospace;
+  --color-bg:              #f7f6f2;
+  --color-surface:         #f9f8f5;
+  --color-surface-2:       #fbfbf9;
+  --color-surface-offset:  #f0ede8;
+  --color-surface-dynamic: #e6e4df;
+  --color-divider:         #dcd9d5;
+  --color-border:          #d4d1ca;
+  --color-text:            #1a1915;
+  --color-text-muted:      #6b6a66;
+  --color-text-faint:      #b0afa9;
+  --color-text-inverse:    #f9f8f4;
+  --color-primary:         #01696f;
+  --color-primary-hover:   #0c4e54;
+  --color-primary-highlight: #d0dedd;
+  --color-success:         #2e6e12;
+  --color-success-highlight: #d0ddc8;
+  --color-warning:         #964219;
+  --color-error:           #a12c7b;
+  --color-console-bg:      #151613;
+  --color-console-text:    #8ed490;
+  --color-console-muted:   #586054;
+  --color-console-info:    #5bbac6;
+  --color-console-warn:    #eaaa48;
+  --color-console-error:   #e0607a;
+  --color-console-border:  #252823;
+  --radius-sm: 0.375rem; --radius-md: 0.5rem; --radius-lg: 0.75rem;
+  --radius-xl: 1rem; --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px oklch(0.2 0.01 80 / 0.06);
+  --shadow-md: 0 4px 12px oklch(0.2 0.01 80 / 0.08);
+  --shadow-lg: 0 12px 32px oklch(0.2 0.01 80 / 0.13);
+  --shadow-xl: 0 24px 64px oklch(0.2 0.01 80 / 0.22);
+  --transition: 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  --font-body: 'Inter', 'Helvetica Neue', sans-serif;
+  --font-mono: 'Geist Mono', 'Fira Code', monospace;
+  --text-xs:   clamp(0.72rem,  0.68rem + 0.22vw, 0.8rem);
+  --text-sm:   clamp(0.8rem,   0.75rem + 0.28vw, 0.9rem);
+  --text-base: clamp(0.9rem,   0.85rem + 0.28vw, 1rem);
+  --text-lg:   clamp(1rem,     0.92rem + 0.45vw, 1.2rem);
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem;
+  --space-4: 1rem;    --space-5: 1.25rem; --space-6: 1.5rem;
+  --space-8: 2rem;    --space-10: 2.5rem;
 }
 [data-theme="dark"] {
-    --color-bg: #202124;
-    --color-surface: #292a2d;
-    --color-surface-2: #303134;
-    --color-surface-offset: #3c4043;
-    --color-surface-dynamic: #484b4e;
-    --color-divider: #3c4043;
-    --color-border: #5f6368;
-    --color-text: #e8eaed;
-    --color-text-muted: #9aa0a6;
-    --color-text-faint: #5f6368;
-    --color-text-inverse: #202124;
-    --color-primary: #8ab4f8;
-    --color-primary-hover: #aecbfa;
-    --color-primary-highlight: #1a3a5c;
-    --color-success: #81c995;
-    --color-success-highlight: #1e3a2a;
-    --color-warning: #fdd663;
-    --color-error: #f28b82;
-    --color-console-bg: #161718;
-    --color-console-text: #81c995;
-    --color-console-muted: #5f6368;
-    --color-console-info: #8ab4f8;
-    --color-console-warn: #fdd663;
-    --color-console-error: #f28b82;
-    --color-console-border: #303134;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-    --shadow-md: 0 2px 6px rgba(0,0,0,0.4);
-    --shadow-lg: 0 4px 12px rgba(0,0,0,0.5);
-    --shadow-xl: 0 8px 24px rgba(0,0,0,0.6);
+  --color-bg:              #111210;
+  --color-surface:         #181714;
+  --color-surface-2:       #1e1d1a;
+  --color-surface-offset:  #252420;
+  --color-surface-dynamic: #2c2b27;
+  --color-divider:         #2a2927;
+  --color-border:          #363530;
+  --color-text:            #e0dfdb;
+  --color-text-muted:      #8a8984;
+  --color-text-faint:      #55544f;
+  --color-text-inverse:    #1a1915;
+  --color-primary:         #4fa8b0;
+  --color-primary-hover:   #2d8e97;
+  --color-primary-highlight: #1e3638;
+  --color-success:         #5daa38;
+  --color-success-highlight: #1e3318;
+  --color-warning:         #e09050;
+  --color-error:           #d46aaa;
+  --color-console-bg:      #0c0d0b;
+  --color-console-text:    #7ec87a;
+  --color-console-muted:   #3e5039;
+  --color-console-info:    #4db8c8;
+  --color-console-warn:    #e8a040;
+  --color-console-error:   #d85870;
+  --color-console-border:  #181b16;
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.25);
+  --shadow-md: 0 4px 12px oklch(0 0 0 / 0.35);
+  --shadow-lg: 0 12px 32px oklch(0 0 0 / 0.45);
+  --shadow-xl: 0 24px 64px oklch(0 0 0 / 0.55);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -362,15 +366,12 @@ details[open] .thinking-content {
 .dataset-drawer.open { transform: translateY(0); }
 
 .drawer-handle {
-    width: 36px;
-    height: 4px;
-    background: var(--color-border);
-    border-radius: 2px;
-    margin: 8px auto 0;
-    flex-shrink: 0;
-    cursor: grab;
+  width: 36px; height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  margin: 8px auto 0;
+  flex-shrink: 0;
 }
-
 .drawer-header {
   display: flex; align-items: center; gap: var(--space-3);
   padding: var(--space-2) var(--space-5) var(--space-1);
@@ -610,7 +611,7 @@ details[open] .thinking-content {
 
 <!-- ── Dataset Drawer ──────────────────────────────────────── -->
 <div class="dataset-drawer" id="datasetDrawer" role="dialog" aria-label="Dataset browser">
-  <div class="drawer-handle" id="drawerHandle"></div>
+  <div class="drawer-handle"></div>
   <div class="drawer-header">
     <div class="drawer-title">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -1126,52 +1127,6 @@ modalBox.addEventListener('keydown', e=>{
 });
 
 chatInput.focus();
-
-
-// Drag to close drawer
-const drawerHandle = document.getElementById('drawerHandle');
-const drawerEl = document.getElementById('datasetDrawer');
-let dragStartY = 0, dragging = false;
-
-drawerHandle.addEventListener('touchstart', e => {
-    dragging = true;
-    dragStartY = e.touches[0].clientY;
-    drawerEl.style.transition = 'none';
-}, { passive: true });
-
-drawerHandle.addEventListener('touchmove', e => {
-    if (!dragging) return;
-    const dy = e.touches[0].clientY - dragStartY;
-    if (dy > 0) drawerEl.style.transform = `translateY(${dy}px)`;
-}, { passive: true });
-
-drawerHandle.addEventListener('touchend', e => {
-    dragging = false;
-    drawerEl.style.transition = '';
-    const dy = e.changedTouches[0].clientY - dragStartY;
-    if (dy > 80) closeDatasetDrawer();
-    else drawerEl.style.transform = '';
-});
-
-// Mouse drag for desktop
-drawerHandle.addEventListener('mousedown', e => {
-    dragging = true;
-    dragStartY = e.clientY;
-    drawerEl.style.transition = 'none';
-});
-document.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    const dy = e.clientY - dragStartY;
-    if (dy > 0) drawerEl.style.transform = `translateY(${dy}px)`;
-});
-document.addEventListener('mouseup', e => {
-    if (!dragging) return;
-    dragging = false;
-    drawerEl.style.transition = '';
-    const dy = e.clientY - dragStartY;
-    if (dy > 80) closeDatasetDrawer();
-    else drawerEl.style.transform = '';
-});
 
 
 
