@@ -148,7 +148,7 @@ input,textarea{font:inherit;color:inherit}
 .product-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-2)}
 .product-title{font-size:var(--text-sm);font-weight:600;color:var(--color-text);line-height:1.35;flex:1}
 .product-id-badge{font-family:var(--font-mono);font-size:10px;color:var(--color-text-faint);background:var(--color-surface-offset);padding:2px 6px;border-radius:var(--radius-sm);flex-shrink:0;border:1px solid var(--color-border)}
-.product-desc{font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.product-desc{font-size:var(--text-xs);color:var(--color-text-muted);line-height:1.5;display:-webkit-box;-webkit-line-clamp: unset;line-clamp: unset;-webkit-box-orient:vertical;overflow: visible;}
 .product-attrs{display:flex;flex-wrap:wrap;gap:4px}
 .attr-chip{font-size:11px;padding:2px 8px;border-radius:var(--radius-full);background:var(--color-primary-highlight);color:var(--color-primary);border:1px solid oklch(from var(--color-primary) l c h / 0.2);font-weight:500;white-space:nowrap}
 .product-card-footer{display:flex;align-items:center;justify-content:flex-end;font-size:var(--text-xs);color:var(--color-text-faint);gap:4px}
@@ -966,8 +966,8 @@ function appendBotMessage(replyText, results){
 function buildCard(p, idx){
   const title  = escHtml(p.title || 'Untitled Product');
   const uid    = escHtml(p.productuid || p.id || '—');
-  const desc   = escHtml((p.productdescription||'').slice(0,115));
-  const attrs  = (p.attributes||[]).slice(0,3)
+  const desc = escHtml(p.productdescription)
+  const attrs = p.attributes       
     .map(a=>`<span class="attr-chip">${escHtml(a.name)}: ${escHtml(a.value)}</span>`)
     .join('');
   return `
@@ -1213,8 +1213,8 @@ function _renderTable(pane, { headers, rows, total }) {
   const thead = headers.map(h => `<th>${escHtml(h)}</th>`).join('');
   const tbody = rows.map(row => {
     const cells = headers.map((_, ci) => {
-      const val = (row[ci] || '').slice(0, 150);
-      return `<td title="${escHtml(row[ci] || '')}">${escHtml(val)}${(row[ci]||'').length > 150 ? '…' : ''}</td>`;
+      const val = row[ci];
+      return `<td title="${escHtml(row[ci] || '')}">${escHtml(row[ci] || '')}</td>`;
     }).join('');
     return `<tr>${cells}</tr>`;
   }).join('');
