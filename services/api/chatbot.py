@@ -10,7 +10,6 @@ from typing_extensions import TypedDict
 from opensearchpy import OpenSearch
 from sentence_transformers import SentenceTransformer
 from api.search import hybrid_search
-from api.cart import create_checkout_session, complete_checkout
 from shared.config.settings import get_settings
 import api.dependencies as deps
 from api.nl_query import parse_nl_query, _resolve_attribute_filters
