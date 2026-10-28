@@ -38,6 +38,15 @@ A shopper says what they need in their own words and gets ranked products with t
 
 ## 🏗 Architecture
 
+<p align="center">
+  <img src="images/architecture.png" alt="Architecture: clients call the FastAPI endpoints; the LangGraph agent and /nl-search share the LLM query parser and SchemaLinker; hybrid_search queries OpenSearch through the hybrid search pipeline; offline ingestion builds the index and schema cache" width="900">
+</p>
+
+<sub>Editable source: [`images/architecture.drawio`](images/architecture.drawio) (open in draw.io or diagrams.net).</sub>
+
+<details>
+<summary><b>Text version (Mermaid)</b></summary>
+
 ```mermaid
 flowchart LR
     subgraph OFF["Offline"]
@@ -68,6 +77,8 @@ flowchart LR
     SEARCH --> HYB
     SUG --> OS
 ```
+
+</details>
 
 Ingestion runs offline. [`pipeline.py`](services/ingestion/pipeline.py) turns the Home Depot CSVs into an OpenSearch index, and [`build_schema_cache.py`](services/scripts/build_schema_cache.py) snapshots the index's attribute names with their embeddings. The FastAPI service ([`main.py`](services/api/main.py)) loads the embedding model and that cache at startup. It then serves four entry points that share one retrieval core. The agent and the query parser both try Gemini first and fall back to Groq.
 
