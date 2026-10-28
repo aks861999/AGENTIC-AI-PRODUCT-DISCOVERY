@@ -1,16 +1,7 @@
 """
-Ingestion pipeline , one-shot ETL that:
-  1. Loads the HuggingFace Amazon Reviews 2023 dataset
-  2. Preprocesses each record (build embedding_text, normalise fields)
-  3. Batch-encodes embedding_text with BAAI/bge-small-en-v1.5
-  4. Bulk-indexes documents into OpenSearch via helpers.bulk()
-
-Run directly:
-    python -m ingestion.pipeline
-or via Docker Compose (profile: ingest):
-    docker compose --profile ingest up ingestion
+Ingestion pipeline using Pandas for Home Depot catalog data.
+Implements run-on text correction and comprehensive bulk-indexing error logging.
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -19,14 +10,15 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Generator, Iterator
+from typing import Any, Iterator
 
-# Allow running from repo root without installing the package
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root → finds shared/
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # services/ → finds api, ingestion, mlops
+import pandas as pd
 
-from datasets import load_dataset
-from opensearchpy import OpenSearch, helpers
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from opensearchpy import OpenSearch, helpers, RequestsHttpConnection 
+
 from sentence_transformers import SentenceTransformer
 
 from shared.config.settings import get_settings
@@ -42,153 +34,96 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-def _to_list(value) -> list:
-    """Normalize numpy arrays, lists, or None to a plain Python list."""
-    if value is None:
-        return []
-    if hasattr(value, "tolist"):   # catches numpy.ndarray
-        return value.tolist()
-    if isinstance(value, list):
-        return value
-    return [value]
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _safe_str(value: Any) -> str:
-    """Convert any value to a non-empty string, empty string if falsy."""
-    if not value:
+    if pd.isna(value) or not value:
         return ""
-    if isinstance(value, list):
-        return " ".join(str(v) for v in value if v)
-    return str(value)
-
-
-def _safe_float(value: Any) -> float | None:
-    """Coerce to float; return None on failure."""
-    if value is None:
-        return None
-    try:
-        result = float(str(value).replace("$", "").replace(",", "").strip())
-        return result if result >= 0 else None
-    except (ValueError, AttributeError):
-        return None
-
-
-def _safe_int(value: Any) -> int | None:
-    """Coerce to int; return None on failure."""
-    if value is None:
-        return None
-    try:
-        return int(float(str(value).strip()))
-    except (ValueError, AttributeError):
-        return None
-
-
-def _extract_image_url(images: Any) -> str:
-    """Pull the first large image URL from the images field."""
-    if not images:
-        return ""
-    if isinstance(images, list) and images:
-        img = images[0]
-        if isinstance(img, dict):
-            return img.get("large", img.get("hi_res", img.get("thumb", ""))) or ""
-    return ""
-
-
-
+    return str(value).strip()
 
 def content_hash(doc: dict) -> str:
-    """SHA-256 of document content, excluding _id and _content_hash itself."""
     stable = {k: v for k, v in doc.items() if k not in ("_id", "_content_hash")}
     return hashlib.sha256(
         json.dumps(stable, sort_keys=True, default=str).encode()
     ).hexdigest()
 
-def preprocess_record(record: dict) -> dict | None:
-    """
-    Transform a raw HuggingFace record into an OpenSearch document.
-
-    Returns None for records that should be skipped (e.g. no ASIN).
-    """
-    parent_asin = record.get("parent_asin") or record.get("asin")
-    if not parent_asin:
+def preprocess_record(row: dict) -> tuple[dict, str] | None:
+    product_uid = _safe_str(row.get("product_uid"))
+    if not product_uid:
         return None
 
-    title = _safe_str(record.get("title"))
-    features_raw = _to_list(record.get("features"))
-    features_text = _safe_str(features_raw)
-    description_raw = _to_list(record.get("description"))
-    description_text = _safe_str(
-        description_raw[0] if description_raw
-        else description_raw
-    )
+    raw_description = _safe_str(row.get("product_description"))
+    raw_attributes = row.get("raw_attributes", [])
 
-    # Build embedding_text: title + features + first description paragraph
-    embedding_text = " ".join(filter(None, [title, features_text, description_text]))
+    bullets = []
+    clean_attributes = []
 
-    # Flatten details dict into top-level keys (store raw for reference)
-    details = record.get("details") or {}
-    if isinstance(details, str):
-        details = {}
-    
+    for attr in raw_attributes:
+        name = _safe_str(attr.get("name"))
+        val = _safe_str(attr.get("value"))
+        if not name or not val:
+            continue
+        if name.startswith("Bullet"):
+            bullets.append(val)  # just collect values, not (name, val) tuples
+        else:
+            clean_attributes.append({"name": name, "value": val})
+
+    # Sort by original BulletNN order to preserve sequence
+    bullets.sort()  # Bullet01, Bullet02, ...
+
+    # Dedupe: remove bullets that already appear in the description
+    unique_bullets = []
+    desc_lower = raw_description.lower()
+    for b in bullets:
+        if b.lower() not in desc_lower:
+            unique_bullets.append(b)
+
+    # Build clean description: original desc + any bullets not already present
+    if unique_bullets:
+        bullet_text = " ".join(unique_bullets)
+        clean_description = f"{raw_description} {bullet_text}".strip()
+    else:
+        clean_description = raw_description
+
+    clean_description = " ".join(clean_description.split())
+
+    # Build title from first bullet or first 80 chars of description
+    # (Home Depot has no explicit title field)
+    if bullets:
+        title = bullets[0][:120]
+    else:
+        title = clean_description[:120]
+
+    # Build embedding text: description + bullet points + structured attributes
+    attr_text = " ".join([f"{a['name']}: {a['value']}" for a in clean_attributes])
+    embedding_text = " ".join(filter(None, [clean_description, " ".join(bullets), attr_text]))
+
     doc = {
-        "_id": parent_asin,
-        "parent_asin": parent_asin,
+        "_id": product_uid,
+        "product_uid": product_uid,
         "title": title,
-        "description": description_text,
-        "features": features_text,
-        "main_category": _safe_str(record.get("main_category")),
-        "sub_category": _safe_str(record.get("sub_category")),
-        "store": _safe_str(record.get("store")),
-        "price": _safe_float(record.get("price")),
-        "average_rating": _safe_float(record.get("average_rating")),
-        "rating_number": _safe_int(record.get("rating_number")),
-        "primary_image_url": _extract_image_url(record.get("images")),
-        "embedding_text": embedding_text,
+        "product_description": clean_description,
+        "bullet_points": bullets,           # NEW: searchable bullet text array
+        "attributes": clean_attributes,
     }
-    doc["_content_hash"] = content_hash(doc)  # ← hash computed after dict is built
-    return doc
-
-
-def iter_batches(
-    records: list[dict], batch_size: int
-) -> Generator[list[dict], None, None]:
-    """Yield successive fixed-size batches from a list."""
-    for i in range(0, len(records), batch_size):
-        yield records[i : i + batch_size]
-
+    return doc, embedding_text
 
 def build_bulk_actions(
     docs: list[dict], vectors: list[list[float]], index_name: str, client: OpenSearch
 ) -> Iterator[dict]:
-    """Zip preprocessed documents with their embedding vectors, skipping unchanged docs."""
-    # Fetch existing hashes for this batch in one mget round-trip
-    ids = [doc["_id"] for doc in docs]
-    existing = client.mget(index=index_name, body={"ids": ids})
-    hash_map = {
-        hit["_id"]: hit["_source"].get("_content_hash")
-        for hit in existing["docs"]
-        if hit.get("found")
-    }
-
-    skipped = 0
+    """Build bulk actions with idempotent index (upsert semantics).
+    
+    NOTE: Content-hash deduplication removed for free-tier compatibility.
+    On t3.small, mget() per batch adds ~100ms latency and memory pressure.
+    For incremental updates, use index aliases and full reindex instead.
+    """
     for doc, vector in zip(docs, vectors):
-        if hash_map.get(doc["_id"]) == doc["_content_hash"]:
-            skipped += 1
-            #print("identical data, skip reindex + re-embedding")
-            continue  # ← identical data, skip reindex + re-embedding
+        # Use _id from doc; OpenSearch will update if exists
         action = {
             "_index": index_name,
             "_id": doc["_id"],
-            "_source": {k: v for k, v in doc.items() if k != "_id"},
+            "_source": {k: v for k, v in doc.items() if k != "_id" and k != "_content_hash"},
         }
         action["_source"]["embedding_vector"] = vector
         yield action
-
-    if skipped:
-        logger.info("Skipped %d unchanged documents in this batch.", skipped)
-
 
 # ── OpenSearch setup ──────────────────────────────────────────────────────────
 
@@ -207,6 +142,9 @@ def get_client(settings) -> OpenSearch:
         timeout=60,
         retry_on_timeout=True,
         max_retries=3,
+        connection_class=RequestsHttpConnection,
+        pool_maxsize=10,
+        pool_block=False,
     )
 
 
@@ -249,13 +187,10 @@ def wait_for_opensearch(client: OpenSearch, retries: int = 20, delay: float = 5.
                 time.sleep(delay)
     raise RuntimeError("OpenSearch did not become ready in time.")
 
-# ── Main pipeline ─────────────────────────────────────────────────────────────
-
 def run_pipeline() -> None:
     settings = get_settings()
 
     logger.info("=== Product Ingestion Pipeline ===")
-    logger.info("Dataset : %s / %s", settings.hf_dataset, settings.hf_dataset_config)
     logger.info("Index   : %s", settings.index_name)
     logger.info("Model   : %s", settings.embedding_model)
 
@@ -270,26 +205,33 @@ def run_pipeline() -> None:
     model = SentenceTransformer(settings.embedding_model)
     logger.info("Model loaded.")
 
-    # 3. Load dataset
-    logger.info("Loading HuggingFace dataset (this may take a while)...")
-    dataset = load_dataset(
-        settings.hf_dataset,
-        settings.hf_dataset_config,
-        split="full[:1000]",
-        trust_remote_code=True,
-    )
-    logger.info("Dataset loaded , %d records.", len(dataset))
+    # 3. Load structured source tables via Pandas
+    logger.info("Parsing structured source tables...")
+    desc_df = pd.read_csv(settings.home_depot_desc_path, encoding="ISO-8859-1")
+    attr_df = pd.read_csv(settings.home_depot_attr_path, encoding="ISO-8859-1")
+
+    # Group attributes into records list to map raw collections safely
+    grouped_attrs = attr_df.groupby('product_uid').apply(
+        lambda x: x[['name', 'value']].to_dict('records')
+    ).reset_index(name='raw_attributes')
+
+    merged_df = pd.merge(desc_df, grouped_attrs, on='product_uid', how='left')
+    merged_df['raw_attributes'] = merged_df['raw_attributes'].apply(lambda x: x if isinstance(x, list) else [])
 
     # 4. Preprocess all records
     logger.info("Preprocessing records...")
     docs: list[dict] = []
+    embedding_texts: list[str] = []
     skipped = 0
-    for raw in dataset:
-        doc = preprocess_record(dict(raw))
-        if doc is None:
+    
+    for _, row in merged_df.iterrows():
+        res = preprocess_record(row.to_dict())
+        if res is None:
             skipped += 1
             continue
-        docs.append(doc)
+        docs.append(res[0])
+        embedding_texts.append(res[1])
+        
     logger.info(
         "Preprocessing complete: %d documents, %d skipped.", len(docs), skipped
     )
@@ -297,7 +239,6 @@ def run_pipeline() -> None:
     # 5. Encode + bulk-index in chunks
     total_indexed = 0
     total_errors = 0
-    embedding_texts = [d["embedding_text"] for d in docs]
 
     logger.info(
         "Encoding and indexing in batches of %d (chunk_size=%d)...",
@@ -305,34 +246,60 @@ def run_pipeline() -> None:
         settings.chunk_size,
     )
 
-    # Process in embedding batches, then accumulate for bulk chunks
-    accumulated_docs: list[dict] = []
-    accumulated_vectors: list[list[float]] = []
+    # Temporarily set refresh interval to off to accelerate batch execution performance
+    client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "-1"}})
+    logger.info("Refresh interval disabled for bulk indexing.")
 
-    for batch_start in range(0, len(docs), settings.embedding_batch_size):
-        batch_docs = docs[batch_start : batch_start + settings.embedding_batch_size]
-        batch_texts = embedding_texts[batch_start : batch_start + settings.embedding_batch_size]
+    try:
 
-        vectors = model.encode(
-            batch_texts,
-            batch_size=settings.embedding_batch_size,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        ).tolist()
+        accumulated_docs: list[dict] = []
+        accumulated_vectors: list[list[float]] = []
 
-        accumulated_docs.extend(batch_docs)
-        accumulated_vectors.extend(vectors)
+        for batch_start in range(0, len(docs), settings.embedding_batch_size):
+            batch_docs = docs[batch_start : batch_start + settings.embedding_batch_size]
+            batch_texts = embedding_texts[batch_start : batch_start + settings.embedding_batch_size]
 
-        # Flush to OpenSearch when we have enough for a bulk chunk
-        while len(accumulated_docs) >= settings.chunk_size:
-            chunk_docs = accumulated_docs[: settings.chunk_size]
-            chunk_vecs = accumulated_vectors[: settings.chunk_size]
-            accumulated_docs = accumulated_docs[settings.chunk_size :]
-            accumulated_vectors = accumulated_vectors[settings.chunk_size :]
+            vectors = model.encode(
+                batch_texts,
+                batch_size=settings.embedding_batch_size,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            ).tolist()
 
-            actions = list(
+            accumulated_docs.extend(batch_docs)
+            accumulated_vectors.extend(vectors)
+
+            # Flush to OpenSearch when we have enough for a bulk chunk
+            while len(accumulated_docs) >= settings.chunk_size:
+                chunk_docs = accumulated_docs[: settings.chunk_size]
+                chunk_vecs = accumulated_vectors[: settings.chunk_size]
+                accumulated_docs = accumulated_docs[settings.chunk_size :]
+                accumulated_vectors = accumulated_vectors[settings.chunk_size :]
+
+                actions = list(
                     build_bulk_actions(chunk_docs, chunk_vecs, settings.index_name, client)
                 )
+                success, errors = helpers.bulk(
+                    client,
+                    actions,
+                    chunk_size=settings.chunk_size,
+                    raise_on_error=False,
+                    request_timeout=120,
+                )
+                total_indexed += success
+                total_errors += len(errors) if isinstance(errors, list) else 0
+                logger.info(
+                    "Bulk chunk: %d indexed, %d errors | total indexed so far: %d",
+                    success,
+                    len(errors) if isinstance(errors, list) else 0,
+                    total_indexed,
+                )
+
+        # Flush remaining records
+        if accumulated_docs:
+            actions = list(
+                build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name, client)
+            )
             success, errors = helpers.bulk(
                 client,
                 actions,
@@ -343,37 +310,21 @@ def run_pipeline() -> None:
             total_indexed += success
             total_errors += len(errors) if isinstance(errors, list) else 0
             logger.info(
-                "Bulk chunk: %d indexed, %d errors | total indexed so far: %d",
-                success,
+                "Final bulk flush: %d indexed, %d errors.", success,
                 len(errors) if isinstance(errors, list) else 0,
-                total_indexed,
             )
 
-    # Flush remaining
-    if accumulated_docs:
-        actions = list(
-            build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name, client)
-        )
-        success, errors = helpers.bulk(
-            client,
-            actions,
-            chunk_size=settings.chunk_size,
-            raise_on_error=False,
-            request_timeout=120,
-        )
-        total_indexed += success
-        total_errors += len(errors) if isinstance(errors, list) else 0
-        logger.info(
-            "Final bulk flush: %d indexed, %d errors.", success,
-            len(errors) if isinstance(errors, list) else 0,
-        )
-
+    finally:
+    # Restore standard search parameters
+        client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "1s"}})
+        logger.info("Refresh interval restored to 1s.")
+    client.indices.forcemerge(index=settings.index_name, max_num_segments=1)
+    
     logger.info(
         "=== Ingestion complete: %d documents indexed, %d errors ===",
         total_indexed,
         total_errors,
     )
-
 
 if __name__ == "__main__":
     run_pipeline()

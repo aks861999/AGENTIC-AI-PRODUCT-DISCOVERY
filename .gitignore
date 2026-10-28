@@ -3,6 +3,8 @@
 *.env
 .env.docker
 
+volumes/home_depot_data/*
+
 demo/
 # Python
 __pycache__/
@@ -48,3 +50,8 @@ experiment/*.parquet
 experiment/*.jsonl
 
 search_shopify/
+
+test.py
+
+start.bat
+stop.bat
