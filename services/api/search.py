@@ -116,6 +116,7 @@ def _build_hybrid_query(
     filters: list[dict],
     size: int = 10,
     from_: int = 0,
+    k: int = 500,
 ) -> dict:
     should_clauses = [
         {
@@ -142,7 +143,7 @@ def _build_hybrid_query(
 
     # kNN has NO inner filter — ANN searches full vector space
     # post_filter below trims results without starving the candidate pool
-    knn_sub = {"knn": {"embedding_vector": {"vector": query_vector, "k": 500}}}
+    knn_sub = {"knn": {"embedding_vector": {"vector": query_vector, "k": k}}}
 
     body: dict = {
         "from": from_,
@@ -180,13 +181,14 @@ async def hybrid_search(
     required_attributes: Optional[dict[str, str]] = None,
     size: int = 10,
     from_: int = 0,
+    k: int = 500,
 ) -> SearchResponse:
     attrs_to_try = dict(required_attributes) if required_attributes else {}
     dropped: list[str] = []
 
     while True:
         filters = _build_filter_clauses(attrs_to_try or None)
-        body = _build_hybrid_query(query, query_vector, filters, size, from_)
+        body = _build_hybrid_query(query, query_vector, filters, size, from_, k)
         params = {"search_pipeline": HYBRID_PIPELINE_ID, "timeout": "15s"}
 
         try:

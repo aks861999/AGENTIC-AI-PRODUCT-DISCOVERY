@@ -1,10 +1,12 @@
 """
 Index alias management for zero-downtime reindexing.
 
-Usage:
-    python -m ingestion.ensure_alias --create
+Usage (the alias is INDEX_NAME, e.g. "products"):
+    python -m ingestion --index products_v1
+    python -m ingestion.ensure_alias --create            # products -> products_v1
+    python -m ingestion --index products_v2              # rebuild while v1 serves traffic
     python -m ingestion.ensure_alias --switch products_v2
-    python -m ingestion.ensure_alias --delete-old
+    python -m ingestion.ensure_alias --delete-old        # drop products_v* not behind the alias
 
 Best practice per OpenSearch architecture: always search via alias,
 never directly against index names. This allows full reindexing without
@@ -30,13 +32,19 @@ logger = logging.getLogger(__name__)
 def ensure_alias(client, alias_name: str, index_name: str) -> None:
     """Create alias pointing to index if alias doesn't exist."""
     # Check if alias exists
-    try:
+    if client.indices.exists_alias(name=alias_name):
         alias_info = client.indices.get_alias(name=alias_name)
         logger.info("Alias '%s' exists, points to: %s", alias_name, list(alias_info.keys()))
         return
-    except Exception:
-        pass
-    
+
+    # An alias can't share its name with a concrete index (the default ingestion target)
+    if client.indices.exists(index=alias_name):
+        raise RuntimeError(
+            f"'{alias_name}' is a concrete index, so it can't also be an alias. "
+            f"Ingest into a versioned index (python -m ingestion --index {index_name}), "
+            f"delete index '{alias_name}', then run --create again."
+        )
+
     # Check if index exists
     if not client.indices.exists(index=index_name):
         logger.error("Index '%s' does not exist. Run ingestion first.", index_name)
@@ -66,12 +74,12 @@ def switch_alias(client, alias_name: str, new_index: str) -> None:
     logger.info("Switched alias '%s' from %s -> '%s'", alias_name, old_indices, new_index)
 
 
-def delete_old_indices(client, alias_name: str, keep_pattern: str = "products_v") -> None:
-    """Delete indices matching pattern that are NOT the current alias target."""
+def delete_old_indices(client, alias_name: str) -> None:
+    """Delete <alias>_v* indices that are NOT the current alias target."""
     alias_info = client.indices.get_alias(name=alias_name)
     current = list(alias_info.keys())
-    
-    all_indices = client.indices.get(f"{keep_pattern}*")
+
+    all_indices = client.indices.get(index=f"{alias_name}_v*")
     to_delete = [name for name in all_indices.keys() if name not in current]
     
     for name in to_delete:
@@ -81,21 +89,21 @@ def delete_old_indices(client, alias_name: str, keep_pattern: str = "products_v"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manage OpenSearch index alias")
-    parser.add_argument("--create", action="store_true", help="Create alias if missing")
+    parser.add_argument("--create", nargs="?", const="", metavar="INDEX",
+                        help="Create the alias if missing, pointing to INDEX (default: <INDEX_NAME>_v1)")
     parser.add_argument("--switch", metavar="INDEX", help="Switch alias to new index")
-    parser.add_argument("--delete-old", action="store_true", help="Delete non-alias indices")
+    parser.add_argument("--delete-old", action="store_true", help="Delete <INDEX_NAME>_v* indices not behind the alias")
     args = parser.parse_args()
-    
+
     settings = get_settings()
     client = get_client(settings)
     wait_for_opensearch(client)
-    
+
     alias = settings.index_name  # e.g., "products"
-    # Convention: actual index is alias + "_v1"
-    index_v1 = f"{alias}_v1"
-    
-    if args.create:
-        ensure_alias(client, alias, index_v1)
+
+    if args.create is not None:
+        # Convention: first versioned index is alias + "_v1"
+        ensure_alias(client, alias, args.create or f"{alias}_v1")
     elif args.switch:
         switch_alias(client, alias, args.switch)
     elif args.delete_old:

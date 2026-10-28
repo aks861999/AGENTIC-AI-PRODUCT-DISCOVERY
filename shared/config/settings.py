@@ -4,7 +4,7 @@ All environment variables are declared here with typed defaults.
 """
 
 from functools import lru_cache
-from typing import Optional, Literal
+from typing import Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,11 +16,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
-    )
-
-    # ── Agent mode ────────────────────────────────────────────────────────────
-    agent_mode: Literal["search_only", "full_commerce"] = Field(
-        default="full_commerce", alias="AGENT_MODE"
     )
 
     # ── OpenSearch ────────────────────────────────────────────────
@@ -40,7 +35,6 @@ class Settings(BaseSettings):
     embedding_model: str = Field(
         default="BAAI/bge-small-en-v1.5", alias="EMBEDDING_MODEL"
     )
-    embedding_dim: int = Field(default=384, alias="EMBEDDING_DIM")
     embedding_batch_size: int = Field(default=128, alias="BATCH_SIZE")
 
     # ── Ingestion ─────────────────────────────────────────────────
@@ -62,11 +56,11 @@ class Settings(BaseSettings):
 
     # ── API ───────────────────────────────────────────────────────
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    api_workers: int = Field(default=1, alias="API_WORKERS")
 
     # ── Search defaults ───────────────────────────────────────────
     default_size: int = Field(default=10, alias="DEFAULT_SIZE")
-    knn_k: int = Field(default=100, alias="KNN_K")
+    knn_k: int = Field(default=500, alias="KNN_K")
+    # Written into the hybrid search pipeline (scaled to sum to 1) at ingestion and API startup
     hybrid_bm25_weight: float = Field(default=0.4, alias="HYBRID_BM25_WEIGHT")
     hybrid_knn_weight: float = Field(default=0.6, alias="HYBRID_KNN_WEIGHT")
 

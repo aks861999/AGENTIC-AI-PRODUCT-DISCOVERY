@@ -7,6 +7,7 @@ import uuid as _uuid
 from enum import Enum
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
+from shared.config.settings import get_settings
 
 class SearchMode(str, Enum):
     lexical  = "lexical"
@@ -24,7 +25,7 @@ class SearchRequest(BaseModel):
 class NLSearchRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     query: str = Field(..., min_length=3, max_length=1000)
-    size:  int = Field(default=10, ge=1, le=100)
+    size:  int = Field(default_factory=lambda: get_settings().default_size, ge=1, le=100)
 
 class SuggestRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)

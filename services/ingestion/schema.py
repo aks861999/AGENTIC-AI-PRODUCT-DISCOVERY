@@ -4,12 +4,14 @@ OpenSearch index mapping and settings for the products index.
 Index design decisions:
 - knn=true at index level enables approximate nearest neighbour queries
 - faiss engine with innerproduct space (valid because embeddings are L2-normalised)
-- hnsw parameters: ef_construction=128, m=16 → good recall/size trade-off
+- hnsw parameters: ef_construction=64, m=8 → small graph for a small instance
 - title is mapped as both text (BM25) and keyword (exact filter / sort)
 - Custom analysers: product_analyzer for full-text, autocomplete_analyzer for suggest
-OpenSearch index mapping and settings for the Home Depot catalog index.
+- embedding_vector dimension is set from the embedding model (build_index_settings)
 """
 from __future__ import annotations
+
+import copy
 
 INDEX_SETTINGS: dict = {
     "settings": {
@@ -102,19 +104,33 @@ INDEX_SETTINGS: dict = {
     },
 }
 
+def build_index_settings(embedding_dim: int) -> dict:
+    """INDEX_SETTINGS with the vector dimension matching the embedding model."""
+    body = copy.deepcopy(INDEX_SETTINGS)
+    body["mappings"]["properties"]["embedding_vector"]["dimension"] = embedding_dim
+    return body
+
+
 HYBRID_PIPELINE_ID = "hybrid-search-pipeline"
 
-HYBRID_SEARCH_PIPELINE: dict = {
-    "description": "Normalise and merge BM25 + kNN scores",
-    "phase_results_processors": [
-        {
-            "normalization-processor": {
-                "normalization": {"technique": "min_max"},
-                "combination": {
-                    "technique": "arithmetic_mean",
-                    "parameters": {"weights": [0.4, 0.6]},
-                },
+
+def build_hybrid_search_pipeline(bm25_weight: float, knn_weight: float) -> dict:
+    """
+    Normalise and merge BM25 + kNN scores. Weights follow the sub-query order
+    in api.search._build_hybrid_query and are scaled to sum to 1.
+    """
+    total = bm25_weight + knn_weight
+    return {
+        "description": "Normalise and merge BM25 + kNN scores",
+        "phase_results_processors": [
+            {
+                "normalization-processor": {
+                    "normalization": {"technique": "min_max"},
+                    "combination": {
+                        "technique": "arithmetic_mean",
+                        "parameters": {"weights": [bm25_weight / total, knn_weight / total]},
+                    },
+                }
             }
-        }
-    ],
-}
+        ],
+    }

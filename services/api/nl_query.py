@@ -289,40 +289,18 @@ class SchemaLinker:
 
     # ── Public resolve method ─────────────────────────────────────────────────
 
-
-    async def resolve_one(
-        self,
-        client,
-        index_name: str,
-        model,
-        raw_key: str,
-    ) -> tuple[str, float] | None:
+    async def resolve(self, client, index_name, model, extracted_name, extracted_value) -> tuple[str, dict]:
         """
-        Resolve a single raw attribute key → (canonical_name, cosine_score).
-        Returns None if no match above threshold.
+        Returns (resolved_name, link). link records how the name was resolved:
+        {"from", "to", "stage": exact|substring|embedding|unverified|no-cache, "score"}
+        where score is the cosine similarity for the embedding stage, else None.
         """
-        await self._refresh_cache(client, index_name, model)
-        if self._canonical_names is None:
-            return None
+        def _linked(to: str, stage: str, score: float | None = None) -> tuple[str, dict]:
+            return to, {"from": extracted_name, "to": to, "stage": stage, "score": score}
 
-        raw_vec = await asyncio.to_thread(
-            lambda: model.encode(raw_key, normalize_embeddings=True)
-        )
-        sims = np.dot(self._canonical_embeddings, raw_vec)  # (N,)
-        best_idx = int(np.argmax(sims))
-        best_score = float(sims[best_idx])
-
-        if best_score < self._EMBED_THRESHOLD:
-            return (self._canonical_names[best_idx], best_score)  # returned even if below threshold so frontend can show the warning
-
-        canonical = self._canonical_names[best_idx]
-        logger.info("SchemaLinker resolve_one: %r → %r (%.3f)", raw_key, canonical, best_score)
-        return (canonical, best_score)
-
-    async def resolve(self, client, index_name, model, extracted_name, extracted_value):
         await self._ensure_cache(client, index_name, model)
         if self._canonical_embeddings is None or not self._canonical_names:
-            return extracted_name  # fail-open: return original, never guess
+            return _linked(extracted_name, "no-cache")  # fail-open: return original, never guess
 
         stage1_rejected: set[str] = set()
         lower_extracted = extracted_name.lower().strip()
@@ -333,7 +311,7 @@ class SchemaLinker:
             if canonical.lower() == lower_extracted:
                 if await self._verify_value(client, index_name, canonical, normalized_value):
                     logger.info("SchemaLinker exact+verified: '%s' → '%s'", extracted_name, canonical)
-                    return canonical
+                    return _linked(canonical, "exact")
                 stage1_rejected.add(canonical)
                 break  # only one exact match possible
 
@@ -355,7 +333,7 @@ class SchemaLinker:
             for candidate_name, _ in substr_candidates:
                 if await self._verify_value(client, index_name, candidate_name, normalized_value):
                     logger.info("SchemaLinker substring+verified: '%s' → '%s'", extracted_name, candidate_name)
-                    return candidate_name
+                    return _linked(candidate_name, "substring")
 
         # ── Stage 3: Embedding similarity + value verification ───────────────
         query_vec = np.array(
@@ -373,7 +351,7 @@ class SchemaLinker:
         for candidate_name, embed_score in candidates:
             if await self._verify_value(client, index_name, candidate_name, normalized_value):
                 logger.info("SchemaLinker embed+verified: '%s' → '%s' (%.3f)", extracted_name, candidate_name, embed_score)
-                return candidate_name
+                return _linked(candidate_name, "embedding", embed_score)
 
         # ── Stage 4: Fail-open — never return an unverified embedding guess ──
         # An unverified guess guarantees 0 results. The original name at least
@@ -382,7 +360,37 @@ class SchemaLinker:
             "SchemaLinker: no verified match for '%s'. Failing open to original name.",
             extracted_name,
         )
-        return extracted_name
+        return _linked(extracted_name, "unverified")
+
+    async def resolve_all_with_links(
+        self,
+        client,
+        index_name: str,
+        model,
+        required_attributes: dict[str, str],
+    ) -> tuple[dict[str, str], list[dict]]:
+        """Resolve all extracted attribute names in parallel; also return each link (see resolve)."""
+        if not required_attributes:
+            return {}, []
+
+        # Ensure cache is warm before firing parallel resolution
+        await self._ensure_cache(client, index_name, model)
+
+        results = await asyncio.gather(*(
+            self.resolve(client, index_name, model, extracted_name, value)
+            for extracted_name, value in required_attributes.items()
+        ))
+
+        resolved: dict[str, str] = {}
+        links: list[dict] = []
+        for (resolved_name, link), value in zip(results, required_attributes.values()):
+            resolved[resolved_name] = value
+            links.append(link)
+
+        if resolved != required_attributes:
+            logger.info("SchemaLinker resolved all: %s → %s", required_attributes, resolved)
+
+        return resolved, links
 
     async def resolve_all(
         self,
@@ -392,27 +400,7 @@ class SchemaLinker:
         required_attributes: dict[str, str],
     ) -> dict[str, str]:
         """Resolve all extracted attribute names in parallel."""
-        if not required_attributes:
-            return {}
-
-        # Ensure cache is warm before firing parallel resolution
-        await self._ensure_cache(client, index_name, model)
-
-        tasks = {
-            extracted_name: self.resolve(
-                client, index_name, model, extracted_name, value
-            )
-            for extracted_name, value in required_attributes.items()
-        }
-
-        resolved: dict[str, str] = {}
-        for extracted_name, coro in tasks.items():
-            resolved_name = await coro
-            resolved[resolved_name] = required_attributes[extracted_name]
-
-        if resolved != required_attributes:
-            logger.info("SchemaLinker resolved all: %s → %s", required_attributes, resolved)
-
+        resolved, _ = await self.resolve_all_with_links(client, index_name, model, required_attributes)
         return resolved
 
 
@@ -529,6 +517,10 @@ def get_nl_chain():
     return _chain
 
 
+# A number, optionally decimal or compound: "8.5", "1-1/2", "3 1/4"
+_NUM = r'\d+(?:\.\d+)?(?:[\-\s/]*\d+(?:\.\d+)?)*'
+
+
 def _stub_parse(query: str) -> ParsedNLQuery:
     """Minimal offline query parser — preserves exact attribute names from user query."""
     import re
@@ -551,17 +543,17 @@ def _stub_parse(query: str) -> ParsedNLQuery:
     # Only runs if no exact attributes were found above
     if not attr_filters:
         # "X inch deep" / "X in. deep" -> infer "Assembled Depth (in.)"
-        m = re.search(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:deep|depth)', text)
+        m = re.search(rf'({_NUM})\s*(?:inch|in\.?)\s*(?:deep|depth)', text)
         if m:
             attr_filters["Assembled Depth (in.)"] = f"{m.group(1)} in"
 
         # "X inch wide" / "X in. wide" -> infer "Assembled Width (in.)"
-        m = re.search(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:wide|width)', text)
+        m = re.search(rf'({_NUM})\s*(?:inch|in\.?)\s*(?:wide|width)', text)
         if m:
             attr_filters["Assembled Width (in.)"] = f"{m.group(1)} in"
 
         # "X inch tall" / "X in. tall" / "X inch high" -> infer "Assembled Height (in.)"
-        m = re.search(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:tall|high|height)', text)
+        m = re.search(rf'({_NUM})\s*(?:inch|in\.?)\s*(?:tall|high|height)', text)
         if m:
             attr_filters["Assembled Height (in.)"] = f"{m.group(1)} in"
 
@@ -580,7 +572,7 @@ def _stub_parse(query: str) -> ParsedNLQuery:
     # Remove "AttrName value" patterns
     semantic = re.sub(r'[A-Z][A-Za-z\s()]+?\s+[A-Za-z0-9][A-Za-z0-9\s./()-]*', '', semantic)
     # Remove dimension phrases
-    semantic = re.sub(r'(\d+(?:[\-\s/]*\d+)*)\s*(?:inch|in\.?)\s*(?:deep|depth|wide|width|tall|high|height)?', '', semantic, flags=re.IGNORECASE)
+    semantic = re.sub(rf'({_NUM})\s*(?:inch|in\.?)\s*(?:deep|depth|wide|width|tall|high|height)?', '', semantic, flags=re.IGNORECASE)
     semantic = re.sub(r'(\d+)\s*-?\s*gauge\b', '', semantic, flags=re.IGNORECASE)
     semantic = re.sub(r'(galvanized|stainless|zinc\s*coated)\s+steel', '', semantic, flags=re.IGNORECASE)
     semantic = re.sub(r'\s+', ' ', semantic).strip()
@@ -596,7 +588,7 @@ async def parse_nl_query(query: str, client=None, index_name=None, model=None) -
 
     # ── NEW: Inject top candidate schema names into the prompt ──────────────
     schema_hint = ""
-    if client and index_name and model and _schema_linker._canonical_names:
+    if client is not None and index_name and model is not None:
         await _schema_linker._ensure_cache(client, index_name, model)
         if _schema_linker._canonical_embeddings is not None:
             q_vec = await asyncio.to_thread(
@@ -695,6 +687,7 @@ async def nl_search(
         index_name=index_name,
         required_attributes=resolved_attrs,
         size=size,
+        k=settings.knn_k,
     )
     return NLSearchResponse(
         total=result.total,

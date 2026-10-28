@@ -4,9 +4,11 @@ Implements run-on text correction and comprehensive bulk-indexing error logging.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -24,15 +26,17 @@ from sentence_transformers import SentenceTransformer
 from shared.config.settings import get_settings
 from ingestion.schema import (
     HYBRID_PIPELINE_ID,
-    HYBRID_SEARCH_PIPELINE,
-    INDEX_SETTINGS,
+    build_hybrid_search_pipeline,
+    build_index_settings,
 )
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=get_settings().log_level,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+_BULLET_NAME = re.compile(r"Bullet\d+")
 
 def _safe_str(value: Any) -> str:
     if pd.isna(value) or not value:
@@ -61,13 +65,13 @@ def preprocess_record(row: dict) -> tuple[dict, str] | None:
         val = _safe_str(attr.get("value"))
         if not name or not val:
             continue
-        if name.startswith("Bullet"):
-            bullets.append(val)  # just collect values, not (name, val) tuples
+        if _BULLET_NAME.fullmatch(name):  # Bullet01..BulletNN, not real specs like "Bullet Proof"
+            bullets.append((name, val))
         else:
             clean_attributes.append({"name": name, "value": val})
 
-    # Sort by original BulletNN order to preserve sequence
-    bullets.sort()  # Bullet01, Bullet02, ...
+    # Sort by attribute name to restore the original Bullet01, Bullet02, ... order
+    bullets = [val for _, val in sorted(bullets)]
 
     # Dedupe: remove bullets that already appear in the description
     unique_bullets = []
@@ -148,26 +152,26 @@ def get_client(settings) -> OpenSearch:
     )
 
 
-def ensure_index(client: OpenSearch, index_name: str) -> None:
+def ensure_index(client: OpenSearch, index_name: str, embedding_dim: int) -> None:
     """Create the index if it does not already exist."""
     if client.indices.exists(index=index_name):
         logger.info("Index '%s' already exists , skipping creation.", index_name)
         return
-    logger.info("Creating index '%s'...", index_name)
-    client.indices.create(index=index_name, body=INDEX_SETTINGS)
+    logger.info("Creating index '%s' (vector dimension %d)...", index_name, embedding_dim)
+    client.indices.create(index=index_name, body=build_index_settings(embedding_dim))
     logger.info("Index '%s' created successfully.", index_name)
 
 
-def ensure_search_pipeline(client: OpenSearch) -> None:
-    """Register the hybrid search pipeline if absent."""
-    # NEW , opensearch-py 3.x compatible
-    try:
-        client.http.get(f"/_search/pipeline/{HYBRID_PIPELINE_ID}")
-    except Exception:
-        client.http.put(
-            f"/_search/pipeline/{HYBRID_PIPELINE_ID}",
-            body=HYBRID_SEARCH_PIPELINE,
-        )
+def ensure_search_pipeline(client: OpenSearch, settings) -> None:
+    """Create or update the hybrid search pipeline with the configured weights."""
+    client.http.put(
+        f"/_search/pipeline/{HYBRID_PIPELINE_ID}",
+        body=build_hybrid_search_pipeline(settings.hybrid_bm25_weight, settings.hybrid_knn_weight),
+    )
+    logger.info(
+        "Search pipeline '%s' set: BM25 weight %.2f, kNN weight %.2f.",
+        HYBRID_PIPELINE_ID, settings.hybrid_bm25_weight, settings.hybrid_knn_weight,
+    )
 
 
 def wait_for_opensearch(client: OpenSearch, retries: int = 20, delay: float = 5.0) -> None:
@@ -187,28 +191,31 @@ def wait_for_opensearch(client: OpenSearch, retries: int = 20, delay: float = 5.
                 time.sleep(delay)
     raise RuntimeError("OpenSearch did not become ready in time.")
 
-def run_pipeline() -> None:
+def run_pipeline(index_name: str | None = None) -> None:
+    """Ingest into index_name (default INDEX_NAME), e.g. a versioned index behind an alias."""
     settings = get_settings()
+    index_name = index_name or settings.index_name
 
     logger.info("=== Product Ingestion Pipeline ===")
-    logger.info("Index   : %s", settings.index_name)
+    logger.info("Index   : %s", index_name)
     logger.info("Model   : %s", settings.embedding_model)
 
-    # 1. Connect & wait for OpenSearch
-    client = get_client(settings)
-    wait_for_opensearch(client)
-    ensure_index(client, settings.index_name)
-    ensure_search_pipeline(client)
-
-    # 2. Load model
+    # 1. Load model (its dimension sizes the vector field)
     logger.info("Loading embedding model '%s'...", settings.embedding_model)
     model = SentenceTransformer(settings.embedding_model)
     logger.info("Model loaded.")
 
+    # 2. Connect & wait for OpenSearch
+    client = get_client(settings)
+    wait_for_opensearch(client)
+    ensure_index(client, index_name, model.get_sentence_embedding_dimension())
+    ensure_search_pipeline(client, settings)
+
     # 3. Load structured source tables via Pandas
     logger.info("Parsing structured source tables...")
-    desc_df = pd.read_csv(settings.home_depot_desc_path, encoding="ISO-8859-1")
-    attr_df = pd.read_csv(settings.home_depot_attr_path, encoding="ISO-8859-1")
+    # The Kaggle CSVs are UTF-8; decoding them as Latin-1 turns "°" into "Â°"
+    desc_df = pd.read_csv(settings.home_depot_desc_path, encoding="utf-8")
+    attr_df = pd.read_csv(settings.home_depot_attr_path, encoding="utf-8")
 
     # Group attributes into records list to map raw collections safely
     grouped_attrs = attr_df.groupby('product_uid').apply(
@@ -247,7 +254,7 @@ def run_pipeline() -> None:
     )
 
     # Temporarily set refresh interval to off to accelerate batch execution performance
-    client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "-1"}})
+    client.indices.put_settings(index=index_name, body={"index": {"refresh_interval": "-1"}})
     logger.info("Refresh interval disabled for bulk indexing.")
 
     try:
@@ -277,7 +284,7 @@ def run_pipeline() -> None:
                 accumulated_vectors = accumulated_vectors[settings.chunk_size :]
 
                 actions = list(
-                    build_bulk_actions(chunk_docs, chunk_vecs, settings.index_name, client)
+                    build_bulk_actions(chunk_docs, chunk_vecs, index_name, client)
                 )
                 success, errors = helpers.bulk(
                     client,
@@ -298,7 +305,7 @@ def run_pipeline() -> None:
         # Flush remaining records
         if accumulated_docs:
             actions = list(
-                build_bulk_actions(accumulated_docs, accumulated_vectors, settings.index_name, client)
+                build_bulk_actions(accumulated_docs, accumulated_vectors, index_name, client)
             )
             success, errors = helpers.bulk(
                 client,
@@ -316,9 +323,9 @@ def run_pipeline() -> None:
 
     finally:
     # Restore standard search parameters
-        client.indices.put_settings(index=settings.index_name, body={"index": {"refresh_interval": "1s"}})
+        client.indices.put_settings(index=index_name, body={"index": {"refresh_interval": "1s"}})
         logger.info("Refresh interval restored to 1s.")
-    client.indices.forcemerge(index=settings.index_name, max_num_segments=1)
+    client.indices.forcemerge(index=index_name, max_num_segments=1)
     
     logger.info(
         "=== Ingestion complete: %d documents indexed, %d errors ===",
@@ -326,5 +333,15 @@ def run_pipeline() -> None:
         total_errors,
     )
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Index the Home Depot catalogue into OpenSearch")
+    parser.add_argument(
+        "--index", metavar="INDEX",
+        help="Target index (default: INDEX_NAME). Use a versioned name such as products_v2 "
+             "to rebuild behind an alias, then run ingestion.ensure_alias --switch.",
+    )
+    run_pipeline(parser.parse_args().index)
+
+
 if __name__ == "__main__":
-    run_pipeline()
+    main()

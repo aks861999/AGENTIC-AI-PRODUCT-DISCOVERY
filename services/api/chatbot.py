@@ -12,7 +12,7 @@ from sentence_transformers import SentenceTransformer
 from api.search import hybrid_search
 from shared.config.settings import get_settings
 import api.dependencies as deps
-from api.nl_query import parse_nl_query, _resolve_attribute_filters
+from api.nl_query import parse_nl_query, _schema_linker
 
 
 import json
@@ -93,7 +93,8 @@ async def search_products(query: str) -> str:
         _trace(f'LangGraph → chat_node → search_products tool called', 'step')
         _trace(f'NL parse: invoking LLM on query="{query[:80]}"', 'llm')
 
-        parsed = await parse_nl_query(query)
+        # Passing the index lets the parser see the closest catalogue attribute names
+        parsed = await parse_nl_query(query, client=client, index_name=settings.index_name, model=model)
         search_q = parsed.semantic_query or query
         raw_attrs = parsed.filters.attributes if parsed.filters.attributes else None
 
@@ -110,28 +111,24 @@ async def search_products(query: str) -> str:
         vector = await asyncio.to_thread(
             lambda: model.encode(search_q, normalize_embeddings=True).tolist()
         )
-        _trace(f'Embedding: BAAI/bge-small-en-v1.5 → {len(vector)}-dim vector', 'dim')
+        _trace(f'Embedding: {settings.embedding_model} → {len(vector)}-dim vector', 'dim')
 
         resolved_attrs = None
         if raw_attrs:
-            # Temporarily capture SchemaLinker output by reading logs
-            # We instrument _resolve_attribute_filters to also return schema_links
-            resolved_attrs, schema_links = await _resolve_with_trace(
-                client=client,
-                index_name=settings.index_name,
-                semantic_query=search_q,
-                model=model,
-                required_attributes=raw_attrs,
+            resolved_attrs, schema_links = await _schema_linker.resolve_all_with_links(
+                client, settings.index_name, model, raw_attrs,
             )
-            if schema_links:
-                for lnk in schema_links:
-                    score = lnk.get('score', 0)
-                    color = 'filter' if score >= 0.70 else 'warn'
+            for lnk in schema_links:
+                if lnk['stage'] == 'embedding':
                     _trace(
-                        f"SchemaLinker: '{lnk['from']}' → '{lnk['to']}' (sim={score:.3f})"
-                        + ('' if score >= 0.70 else ' ⚠ below threshold, attr dropped'),
-                        color
+                        f"SchemaLinker: '{lnk['from']}' → '{lnk['to']}' "
+                        f"(sim={lnk['score']:.3f} ≥ {_schema_linker._EMBED_THRESHOLD}, value verified)",
+                        'filter',
                     )
+                elif lnk['stage'] in ('exact', 'substring'):
+                    _trace(f"SchemaLinker: '{lnk['from']}' → '{lnk['to']}' ({lnk['stage']} match, value verified)", 'filter')
+                else:
+                    _trace(f"SchemaLinker: '{lnk['from']}' kept as-is ⚠ no catalogue name verified for this value", 'warn')
             if resolved_attrs:
                 _trace(f'Resolved attrs: {json.dumps(resolved_attrs)}', 'filter')
             else:
@@ -155,6 +152,7 @@ async def search_products(query: str) -> str:
             index_name=settings.index_name,
             required_attributes=resolved_attrs,
             size=5,
+            k=settings.knn_k,
         )
 
         if not result.hits:
@@ -190,44 +188,6 @@ async def search_products(query: str) -> str:
         _trace(f'✗ search_products error: {exc}', 'error')
         return json.dumps({"text": "Search failed, please try again.", "products": []})
 
-
-
-async def _resolve_with_trace(
-    client, index_name: str, semantic_query: str, model, required_attributes: dict
-) -> tuple[dict | None, list[dict]]:
-    """
-    Calls _resolve_attribute_filters AND captures per-attribute schema links.
-    Returns (resolved_attrs, schema_links).
-    schema_links: [{"from": "colour", "to": "Color/Finish", "score": 0.838}, ...]
-    """
-    from api.nl_query import _schema_linker
-
-    schema_links = []
-    # Call SchemaLinker directly to get scores per attribute
-    for raw_key in required_attributes:
-        try:
-            # _schema_linker.resolve_one returns (canonical_name, score) or None
-            result = await _schema_linker.resolve_one(
-                client, index_name, model, raw_key
-            )
-            if result:
-                canonical, score = result
-                schema_links.append({"from": raw_key, "to": canonical, "score": score})
-            else:
-                schema_links.append({"from": raw_key, "to": None, "score": 0.0})
-        except Exception:
-            # resolve_one may not exist — fall back to full resolve
-            pass
-
-    # Still call the original for the actual resolved dict
-    resolved = await _resolve_attribute_filters(
-        client=client,
-        index_name=index_name,
-        semantic_query=semantic_query,
-        model=model,
-        required_attributes=required_attributes,
-    )
-    return resolved, schema_links
 
 
 

@@ -788,7 +788,8 @@ function finaliseThinkingBlock(hitCount, traceEntries) {
 }
 
 
-const API_BASE   = '';
+// Same origin when served by the API (GET /), localhost when opened as a file
+const API_BASE   = location.protocol === 'file:' ? 'http://localhost:8000' : '';
 const SESSION_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
 let isLoading    = false;
 
@@ -833,7 +834,7 @@ async function checkHealth(){
     }
   } catch(e){
     statusDot.className   = 'status-dot error';
-    statusText.textContent = 'API online';
+    statusText.textContent = 'API offline';
     clog(`x Health check failed: ${e.message}`, 'error');
     clog('  Run: uvicorn api.main:app --reload --port 8000', 'warn');
   }
