@@ -4,8 +4,6 @@
 
 **A conversational search assistant for a home-improvement catalogue. A LangGraph agent turns requests like *"12 gauge galvanized steel joist hanger"* into hybrid BM25 + vector queries over OpenSearch. Before filtering, a schema linker maps the shopper's wording onto the catalogue's 4,647 real attribute names.**
 
-Research prototype for an M.Sc. thesis at Berliner Hochschule für Technik.
-
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/Agent-LangGraph-1C3C3C?logo=langchain&logoColor=white)
@@ -475,7 +473,7 @@ All ten candidates clear the 0.65 threshold, and the right one ranks sixth. Simi
 - [ ] **Schema cache never refreshes while the file exists.** After re-indexing, rebuild `schema_cache.npz`; an automatic check against the live index's attribute count would remove this manual step.
 - [ ] **Not production-hardened.** Sessions are held in an unbounded in-memory dict, there's no auth or rate limiting, and CORS is `*`.
 
-**Research roadmap** (planned for the thesis, not implemented)
+**Research roadmap** (planned, not implemented)
 
 - [ ] **Multimodal queries**: accept image + text input, with CLIP-style joint embeddings fused into the BM25/dense pipeline.
 - [ ] **Implicit signal capture**: log the agent's tool calls as a structured event stream, and use session-level behaviour to re-rank results within the conversation.
